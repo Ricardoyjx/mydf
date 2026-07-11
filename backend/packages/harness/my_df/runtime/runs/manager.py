@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass, field
 
-from backend.packages.harness.runtime.runs.schema import DisconnectMode, RunStatus
+from my_df.runtime.runs.schema import DisconnectMode, RunStatus
 
 
 @dataclass

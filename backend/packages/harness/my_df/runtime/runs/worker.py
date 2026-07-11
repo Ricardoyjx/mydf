@@ -3,9 +3,9 @@ from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
 
-from backend.packages.harness.my_df.agents.config.app_config import AppConfig
-from backend.packages.harness.runtime.runs.manager import RunManager, RunRecord
-from backend.packages.harness.runtime.stream_bridge.base import StreamBridge
+from my_df.agents.config.app_config import AppConfig
+from my_df.runtime.runs.manager import RunManager, RunRecord
+from my_df.runtime.stream_bridge.base import StreamBridge
 
 
 @dataclass(frozen=True)

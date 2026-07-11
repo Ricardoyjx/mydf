@@ -3,8 +3,8 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.tools import BaseTool
 from langchain_core.runnables import RunnableConfig
 
-from backend.packages.harness.my_df.agents.thread_state import ThreadState
-from backend.packages.harness.my_df.models.factory import create_chat_model
+from my_df.agents.thread_state import ThreadState
+from my_df.models.factory import create_chat_model
 from my_df.agents.config.app_config import AppConfig, get_app_config
 from my_df.agents.middlewares.todo_middleware import TodoMiddleware
 from my_df.agents.middlewares.runtime_middlewares import (

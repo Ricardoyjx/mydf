@@ -2,7 +2,7 @@ import importlib
 
 from langchain.chat_models import BaseChatModel
 
-from backend.packages.harness.my_df.agents.config.app_config import AppConfig
+from my_df.agents.config.app_config import AppConfig
 
 
 def create_chat_model(
