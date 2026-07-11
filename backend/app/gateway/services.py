@@ -6,9 +6,8 @@ import uuid
 
 from my_df.agents.lead_agent.agent import make_lead_agent
 from my_df.runtime.runs.manager import RunManager, RunRecord
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import HTTPException, Request
 from my_df.runtime.stream_bridge.base import StreamBridge, StreamEvent
-from app.gateway.deps import get_run_manager
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
 from my_df.runtime.runs.worker import run_agent_mini
 
@@ -30,7 +29,7 @@ async def start_run(
     request : Request
         FastAPI request — used to retrieve singletons from ``app.state``.
     """
-    run_mgr = get_run_manager(request)
+    # run_mgr = get_run_manager(request)
 
     now = datetime.now().isoformat()
 

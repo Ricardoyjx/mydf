@@ -1,14 +1,13 @@
 from collections.abc import Callable
 from my_df.runtime.runs.manager import RunManager
-from fastapi import FastAPI, HTTPException, Request
-from typing import TYPE_CHECKING, TypeVar, cast
-
+from fastapi import HTTPException, Request
+from typing import TypeVar, cast
 from my_df.runtime.stream_bridge.base import StreamBridge
 
 T = TypeVar("T")
 
 
-def _require(attr: str, label: str) -> Callable[[Request], T]:
+def _require(attr: str, label: str) -> Callable[[Request], T]:  # type: ignore
     """Create a FastAPI dependency that returns ``app.state.<attr>`` or 503."""
 
     def dep(request: Request) -> T:
