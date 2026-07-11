@@ -3,6 +3,8 @@ from my_df.runtime.runs.manager import RunManager
 from fastapi import FastAPI, HTTPException, Request
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from my_df.runtime.stream_bridge.base import StreamBridge
+
 T = TypeVar("T")
 
 
