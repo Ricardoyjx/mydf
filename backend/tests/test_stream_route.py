@@ -23,9 +23,11 @@ pytestmark = pytest.mark.asyncio
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class FakeRunRecord:
     """Minimal stand-in for ``RunRecord`` used by the SSE consumer."""
+
     run_id: str
     thread_id: str
     assistant_id: str | None
@@ -60,6 +62,7 @@ def _sse(event: str, data: Any = None, *, event_id: str | None = None) -> str:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def app():
     """FastAPI app with mock singletons on ``app.state``."""
@@ -81,8 +84,8 @@ async def client(app):
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestStreamRoute:
 
+class TestStreamRoute:
     async def test_returns_sse_stream(self, client: httpx.AsyncClient):
         """Should return ``text/event-stream`` with metadata/updates/end."""
         with (
@@ -101,14 +104,19 @@ class TestStreamRoute:
 
             async def _gen(*_a, **_k):
                 yield _sse("metadata", {"run_id": fake_run.run_id})
-                yield _sse("updates", {"messages": [{"role": "assistant", "content": "hi"}]})
+                yield _sse(
+                    "updates", {"messages": [{"role": "assistant", "content": "hi"}]}
+                )
                 yield _sse("end", None)
 
             mock_cons.return_value = _gen()
 
             resp = await client.post(
                 "/api/runs/stream",
-                json={"assistant_id": "test-agent", "input": {"messages": [{"role": "user", "content": "hello"}]}},
+                json={
+                    "assistant_id": "test-agent",
+                    "input": {"messages": [{"role": "user", "content": "hello"}]},
+                },
             )
 
         assert resp.status_code == 200
