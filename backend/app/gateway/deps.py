@@ -1,15 +1,20 @@
 """FastAPI 依赖注入工具，从 app.state 中获取共享实例。"""
 
 from collections.abc import Callable
+from my_df.agents.config.app_config import get_app_config
+from my_df.runtime.events.store.base import RunEventStore
 from my_df.runtime.runs.manager import RunManager
 from fastapi import HTTPException, Request
 from typing import TypeVar, cast
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from my_df.runtime.runs.store.base import RunStore
+from my_df.runtime.runs.worker import RunContext
 from my_df.runtime.stream_bridge.base import StreamBridge
 
 T = TypeVar("T")
 
 
-def _require(attr: str, label: str) -> Callable[[Request], T]:
+def _require(attr: str, label: str) -> Callable[[Request], T]:  # type: ignore
     """工厂函数：生成一个 FastAPI 依赖，从 ``app.state.<attr>`` 取值。
 
     如果该属性未设置，返回 503 Service Unavailable。
@@ -25,6 +30,14 @@ def _require(attr: str, label: str) -> Callable[[Request], T]:
     return dep
 
 
+Checkpointer = None | bool | BaseCheckpointSaver
+"""用于子图的检查指针的类型 
+
+``True` 启用该子图的持久检查点 
+ “False”禁用检查点，即使父图有检查点 
+ `None` 从父图继承检查指针
+"""
+
 # 预定义的依赖注入器
 get_stream_bridge: Callable[[Request], StreamBridge] = _require(
     "stream_bridge", "Stream bridge"
@@ -32,3 +45,42 @@ get_stream_bridge: Callable[[Request], StreamBridge] = _require(
 get_run_manager: Callable[[Request], RunManager] = _require(
     "run_manager", "Run manager"
 )
+get_checkpointer: Callable[[Request], Checkpointer] = _require(
+    "checkpointer", "Checkpointer"
+)
+get_run_event_store: Callable[[Request], RunEventStore] = _require(
+    "run_event_store", "Run event store"
+)
+# get_feedback_repo: Callable[[Request], FeedbackRepository] = _require(
+#     "feedback_repo", "Feedback"
+# )
+get_run_store: Callable[[Request], RunStore] = _require("run_store", "Run store")
+
+
+def get_store(request: Request):
+    """Return the global store (may be ``None`` if not configured)."""
+    return getattr(request.app.state, "store", None)
+
+
+def get_run_context(request: Request) -> RunContext:
+    """从 ``app state `` 单例构建一个 :class :`Run Context `
+
+     返回具有基础设施依赖项的 *base * 上下文
+     ``app config `` 字段是实时解析的，因此每个运行字段（例如
+    ``models [*] max tokens ``) 遵循 ``config yaml `` 编辑；的
+     “事件存储”/“运行事件配置”对保持冻结到快照
+     在 :func :`langgraph Runtime` 中捕获，因此调用者永远不会看到存储绑定
+     一个后端与指向另一个后端的配置配对
+    """
+
+    return RunContext(
+        # checkpointer=get_checkpointer(request),
+        checkpointer=getattr(request.app.state, "checkpointer", None),
+        # store=get_store(request),
+        store=getattr(request.app.state, "store", None),
+        # event_store=get_run_event_store(request),
+        event_store=getattr(request.app.state, "event_store", None),
+        run_events_config=getattr(request.app.state, "run_events_config"),
+        # thread_store=get_thread_store(request),
+        app_config=get_app_config(),
+    )

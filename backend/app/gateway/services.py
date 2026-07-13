@@ -11,13 +11,15 @@ from my_df.runtime.runs.manager import RunManager, RunRecord
 from fastapi import HTTPException, Request
 from my_df.runtime.stream_bridge.base import StreamBridge, StreamEvent
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
-from my_df.runtime.runs.worker import run_agent_mini
+from my_df.runtime.runs.worker import RunContext, run_agent_mini
 
 
 async def start_run(
     body: Any,
     thread_id: str,
     request: Request,
+    context: RunContext,
+    bridge: StreamBridge,
 ) -> RunRecord:
     """创建 RunRecord 并启动后台 agent 任务。
 
@@ -29,7 +31,6 @@ async def start_run(
     # run_mgr = get_run_manager(request)  # 暂未启用持久化管理
 
     now = datetime.now().isoformat()
-
     # 根据请求决定断开行为
     disconnect = (
         DisconnectMode.cancel
@@ -67,6 +68,9 @@ async def start_run(
             agent_factory=agent_factory,
             graph_input=graph_input,
             config=config,
+            run_id=run_id,
+            bridge=bridge,
+            context=context,
         )
     )
 
