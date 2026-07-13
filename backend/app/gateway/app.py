@@ -1,5 +1,6 @@
 import os as _os
 
+from typing import cast
 from fastapi import FastAPI
 from my_df.runtime.runs.schema import DisconnectMode
 from app.gateway.routers.runs import router as runs_router
@@ -129,7 +130,7 @@ def _setup_debug(app: FastAPI) -> None:
         async def _run():
             try:
                 async for chunk in agent.astream(
-                    inp,
+                    inp,  # type: ignore
                     {"recursion_limit": 100, "configurable": {"run_id": run_id}},
                 ):
                     await bridge.publish(run_id, "updates", {"agent": chunk})
