@@ -1,6 +1,7 @@
 import os as _os
 
 from fastapi import FastAPI
+from my_df.runtime.runs.schema import DisconnectMode
 from app.gateway.routers.runs import router as runs_router
 
 
@@ -115,7 +116,7 @@ def _setup_debug(app: FastAPI) -> None:
             thread_id=thread_id,
             assistant_id=getattr(body, "assistant_id", None),
             status=RunStatus.pending,
-            on_disconnect="cancel",
+            on_disconnect=DisconnectMode.cancel,
             created_at=now,
             updated_at=now,
         )
