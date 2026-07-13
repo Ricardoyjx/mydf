@@ -85,9 +85,9 @@ class TodoMiddleware(TodoListMiddleware):
         return {"jump_to": "model"}
 
     @override
-    def before_agent():
+    def before_agent(self, state, runtime) -> None:
         pass
 
     @override
-    def after_agent():
+    def after_agent(self, state, runtime) -> None:
         pass
