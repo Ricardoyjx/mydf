@@ -3,6 +3,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.tools import BaseTool
 from langchain_core.runnables import RunnableConfig
 
+from my_df.agents.config.model_config import ModelConfig
 from my_df.agents.thread_state import ThreadState
 from my_df.models.factory import create_chat_model
 from my_df.agents.config.app_config import AppConfig, get_app_config
@@ -75,7 +76,7 @@ def _build_middlewares(
     is_plan_mode = cfg.get("is_plan_mode", False)
     todo_list_middleware = _create_todo_list_middleware(is_plan_mode)
     if todo_list_middleware is not None:
-        middlewares.append(todo_list_middleware)
+        middlewares.append(todo_list_middleware)  # type: ignore
 
     # # add tokenUsageMiddleware when token_usage tracking is enabled
     # if resolved_app_config.token_usage_tracking_enabled:
@@ -274,7 +275,15 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         model=create_chat_model(
             name=model_name,
             thinking_enable=False,
-            app_config=AppConfig(),
+            app_config=AppConfig(
+                models=[
+                    ModelConfig(
+                        name="deepseek-v4-flash",
+                        model="deepseek-v4-flash",
+                        use="langchain_deepseek.ChatDeepSeek",
+                    ),
+                ]
+            ),
             attach_tracing=False,
         ),
         tools=tools,

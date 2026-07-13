@@ -57,7 +57,10 @@ async def start_run(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    agent_factory = make_lead_agent(body.assistant_id)
+    agent_config: dict[str, Any] = {"recursion_limit": 100}
+    if body.assistant_id:
+        agent_config.setdefault("configurable", {})["assistant_id"] = body.assistant_id
+    agent_factory = make_lead_agent(agent_config)
     graph_input = body.input
     config = build_run_config()
     task = asyncio.create_task(
