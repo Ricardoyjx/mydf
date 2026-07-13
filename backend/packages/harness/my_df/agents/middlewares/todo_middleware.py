@@ -1,3 +1,5 @@
+"""TodoMiddleware：在上下文丢失时自动恢复待办事项提醒。"""
+
 from typing import Any, override
 
 from langchain.agents.middleware import Runtime, TodoListMiddleware, hook_config
@@ -7,12 +9,11 @@ from my_df.agents.thread_state import ThreadState
 
 
 class TodoMiddleware(TodoListMiddleware):
-    """Extends TodoListMiddleware with `write_todos` context-loss detection.
+    """扩展 TodoListMiddleware，增加 `write_todos` 上下文丢失检测。
 
-    When the original `write_todos` tool call has been truncated from the message
-    history (e.g., after summarization), the model loses awareness of the current
-    todo list. This middleware detects that gap in `before_model` / `abefore_model`
-    and injects a reminder message so the model can continue tracking progress.
+    当原始的 `write_todos` 工具调用因上下文窗口限制被截断（如摘要后）时，
+    模型会丢失当前待办列表的认知。此中间件在 ``before_model`` / ``abefore_model``
+    中检测到该空隙，并注入一条提醒消息，使模型能继续追踪进度。
     """
 
     state_schema = ThreadState
@@ -23,9 +24,11 @@ class TodoMiddleware(TodoListMiddleware):
         state: ThreadState,
         runtime: Runtime,
     ):
+        """模型调用前：若有 active 待办但上下文已丢失，注入提醒。"""
         todos: list[Todo] = state.get("todos") or []
         if not todos:
             return None
+        # 格式化当前待办状态
         formatted: list[str] = []
         for todo in todos:
             status = todo.get("status", "pending")
@@ -35,15 +38,13 @@ class TodoMiddleware(TodoListMiddleware):
         reminder = HumanMessage(
             name="todo_reminder",
             additional_kwargs={
-                "hide_from_ui": True,
+                "hide_from_ui": True,  # 不向用户展示此消息
             },
             content=(
                 "<system_reminder>\n"
-                "Your todo list from earlier is no longer visible in the current context window, "
-                "but it is still active. Here is the current state:\n\n"
+                "你的待办列表在之前的上下文中已不可见，但它仍然活跃。当前状态：\n\n"
                 f"{formatted}\n\n"
-                "Continue tracking and updating this todo list as you work. "
-                "Call `write_todos` whenever the status of any item changes.\n"
+                "请继续追踪和更新此待办列表。任何项目状态变化时请调用 `write_todos`。\n"
                 "</system_reminder>"
             ),
         )
@@ -57,14 +58,13 @@ class TodoMiddleware(TodoListMiddleware):
         state: ThreadState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
-        """防止在待办事项（todo items）尚未全部完成时，Agent 过早退出。
-        除了基类中对并行 write_todos 调用的检查外，此重写方法还会拦截那些没有任何工具调用（
-        tool calls）的模型响应——前提是当前仍存在未完成的待办事项。
-        此时，它会注入一条提醒性质的 HumanMessage（人类消息），并强制跳转回模型节点，
-        以便 Agent 能继续处理待办列表中的任务。
-        此外，系统设置了一个重试上限 _MAX_COMPLETION_REMINDERS（默认为 2 次），
-        以防止 Agent 无法取得进一步进展时陷入死循环。
+        """模型调用后：防止 Agent 在待办未完成时过早退出。
+
+        除了基类对并行 write_todos 调用的检查外，此方法还会拦截那些没有任何
+        工具调用的模型响应——前提是仍有未完成的待办事项。此时强制跳转回模型节点，
+        使 Agent 能继续处理待办列表中的任务。
         """
+        # 先让基类处理它的逻辑
         base_result = super().after_model(state, runtime)  # type: ignore
         if base_result is not None:
             return base_result
@@ -76,18 +76,20 @@ class TodoMiddleware(TodoListMiddleware):
         if not last_ai:
             return None
 
-        # 3. Allow exit when all todos are completed or there are no todos.
+        # 所有待办已完成 → 允许退出
         todos: list[Todo] = state.get("todos") or []
         if not todos or all(t.get("status") == "completed" for t in todos):
             return None
 
-        # 将一条提醒指令排入队列，留给下一次模型请求使用，并强制跳转回模型节点。
+        # 仍有未完成的待办 → 跳回模型继续处理
         return {"jump_to": "model"}
 
     @override
     def before_agent(self, state, runtime) -> None:
+        """Agent 调用前 hook（当前无操作）。"""
         pass
 
     @override
     def after_agent(self, state, runtime) -> None:
+        """Agent 调用后 hook（当前无操作）。"""
         pass

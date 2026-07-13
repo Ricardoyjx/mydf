@@ -1,3 +1,5 @@
+"""FastAPI 依赖注入工具，从 app.state 中获取共享实例。"""
+
 from collections.abc import Callable
 from my_df.runtime.runs.manager import RunManager
 from fastapi import HTTPException, Request
@@ -7,8 +9,11 @@ from my_df.runtime.stream_bridge.base import StreamBridge
 T = TypeVar("T")
 
 
-def _require(attr: str, label: str) -> Callable[[Request], T]:  # type: ignore
-    """Create a FastAPI dependency that returns ``app.state.<attr>`` or 503."""
+def _require(attr: str, label: str) -> Callable[[Request], T]:
+    """工厂函数：生成一个 FastAPI 依赖，从 ``app.state.<attr>`` 取值。
+
+    如果该属性未设置，返回 503 Service Unavailable。
+    """
 
     def dep(request: Request) -> T:
         val = getattr(request.app.state, attr, None)
@@ -20,19 +25,10 @@ def _require(attr: str, label: str) -> Callable[[Request], T]:  # type: ignore
     return dep
 
 
+# 预定义的依赖注入器
 get_stream_bridge: Callable[[Request], StreamBridge] = _require(
     "stream_bridge", "Stream bridge"
 )
 get_run_manager: Callable[[Request], RunManager] = _require(
     "run_manager", "Run manager"
 )
-# get_checkpointer: Callable[[Request], Checkpointer] = _require(
-#     "checkpointer", "Checkpointer"
-# )
-# get_run_event_store: Callable[[Request], RunEventStore] = _require(
-#     "run_event_store", "Run event store"
-# )
-# get_feedback_repo: Callable[[Request], FeedbackRepository] = _require(
-#     "feedback_repo", "Feedback"
-# )
-# get_run_store: Callable[[Request], RunStore] = _require("run_store", "Run store")

@@ -1,3 +1,5 @@
+"""Agent 工厂函数：封装 langchain.agents.create_agent 调用。"""
+
 from __future__ import annotations
 
 import logging
@@ -10,7 +12,6 @@ if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
     from langchain_core.tools import BaseTool
     from langgraph.checkpoint.base import BaseCheckpointSaver
-    from langgraph.graph.state import CompiledStateGraph
 
 logger = logging.getLogger(__name__)
 
@@ -21,42 +22,26 @@ def create_mydf_agent(
     *,
     system_prompt: str | None = None,
     middleware: list[AgentMiddleware] | None = None,
-    # features
-    # extra_middleware
     plan_mode: bool = False,
     state_schema: type | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     name: str = "default",
 ) -> CompiledStateGraph:
-    """Parameters
-    ----------
-    model:
-        Chat model instance.
-    tools:
-        User-provided tools.  Feature-injected tools are appended automatically.
-    system_prompt:
-        System message.  ``None`` uses a minimal default.
-    middleware:
-        **Full takeover** — if provided, this exact list is used.
-        Cannot be combined with *features* or *extra_middleware*.
-    features:
-        Declarative feature flags.  Cannot be combined with *middleware*.
-    extra_middleware:
-        Additional middlewares inserted into the auto-assembled chain via
-        ``@Next``/``@Prev`` positioning.  Cannot be used with *middleware*.
-    plan_mode:
-        Enable TodoMiddleware for task tracking.
-    state_schema:
-        LangGraph state type.  Defaults to ``ThreadState``.
-    checkpointer:
-        Optional persistence backend.
-    name:
-        Agent name (passed to middleware that cares, e.g. ``MemoryMiddleware``).
+    """创建 my-df Agent 的便捷工厂函数。
 
-    Raises
-    ------
-    ValueError
-        If both *middleware* and *features*/*extra_middleware* are provided.
+    参数：
+        model:         聊天模型实例。
+        tools:         用户提供的工具。特性注入的工具会自动追加。
+        system_prompt: 系统消息。``None`` 使用最小默认值。
+        middleware:    **完全接管** — 若提供则使用此精确列表。
+                       不可与 *features* 或 *extra_middleware* 同时使用。
+        plan_mode:     启用 TodoMiddleware 进行任务追踪。
+        state_schema:  LangGraph 状态类型。默认 ``ThreadState``。
+        checkpointer:  可选的持久化后端。
+        name:          Agent 名称（传递给关心此信息的中间件，如 MemoryMiddleware）。
+
+    抛出：
+        ValueError: 同时提供了 *middleware* 和 *features*/*extra_middleware*。
     """
 
     effective_tools: list[BaseTool] = list(tools or [])

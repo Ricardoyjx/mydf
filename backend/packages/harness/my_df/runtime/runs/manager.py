@@ -1,3 +1,5 @@
+"""运行管理器：基于内存的运行注册表，可选持久化 RunStore 支持。"""
+
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RunRecord:
-    """Mutable record for a single run."""
+    """单次运行的可变记录。"""
 
     run_id: str
     thread_id: str
@@ -42,11 +44,10 @@ class RunRecord:
 
 
 class RunManager:
-    """In-memory run registry with optional persistent RunStore backing.
+    """内存运行注册表，可选的持久化 RunStore 支持。
 
-    All mutations are protected by an asyncio lock. When a ``store`` is
-    provided, serializable metadata is also persisted to the store so
-    that run history survives process restarts.
+    所有变更操作受 asyncio 锁保护。当提供了 ``store`` 时，
+    可序列化的元数据也会持久化到存储中，以便进程重启后恢复运行历史。
     """
 
     def __init__(
@@ -57,53 +58,25 @@ class RunManager:
         self._lock = asyncio.Lock()
         self._store = store
 
-    # async def _persist_status(
-    #     self, record: RunRecord, status: RunStatus, *, error: str | None = None
-    # ) -> bool:
-    #     """Best-effort persist a status transition to the backing store."""
-    #     if self._store is None:
-    #         return True
-    #     row_recovery_payload = self._store_put_payload(record, error=error)
-    #     try:
-    #         updated = await self._call_store_with_retry(
-    #             "update_status",
-    #             record.run_id,
-    #             lambda: self._store.update_status(
-    #                 record.run_id, status.value, error=error
-    #             ),
-    #         )
-    #         if updated is False:
-    #             return await self._persist_snapshot_to_store(
-    #                 record.run_id, row_recovery_payload
-    #             )
-    #         return True
-    #     except Exception:
-    #         logger.warning(
-    #             "Failed to persist status update for run %s",
-    #             record.run_id,
-    #             exc_info=True,
-    #         )
-    #         return False
-
     async def cancel(self, run_id: str, *, action: str = "interrupt") -> bool:
-        """Request cancellation of a run.
+        """请求取消一次运行。
 
-        Args:
-            run_id: The run ID to cancel.
-            action: "interrupt" keeps checkpoint, "rollback" reverts to pre-run state.
+        参数：
+            run_id: 要取消的运行 ID。
+            action: "interrupt" 保留检查点，"rollback" 恢复到运行前状态。
 
-        Sets the abort event with the action reason and cancels the asyncio task.
-        Returns ``True`` if cancellation was initiated **or** the run was already
-        interrupted (idempotent — a second cancel is a no-op success).
-        Returns ``False`` only when the run is unknown to this worker or has
-        reached a terminal state other than interrupted (completed, failed, etc.).
+        设置 abort_event 并取消 asyncio 任务。
+        返回 ``True`` 表示取消已发起**或**运行已被中断（幂等）。
+        返回 ``False`` 仅当运行未知或已处于终端状态（完成、失败等）。
         """
         async with self._lock:
             record = self._runs.get(run_id)
             if record is None:
                 return False
+            # 已中断 → 幂等成功
             if record.status == RunStatus.interrupted:
-                return True  # idempotent — already cancelled on this worker
+                return True
+            # 非待处理/运行中状态 → 不可取消
             if record.status not in (RunStatus.pending, RunStatus.running):
                 return False
             record.abort_action = action
@@ -112,6 +85,5 @@ class RunManager:
                 record.task.cancel()
             record.status = RunStatus.interrupted
             record.updated_at = datetime.now().isoformat()
-        # await self._persist_status(record, RunStatus.interrupted)
-        logger.info("Run %s cancelled (action=%s)", run_id, action)
+        logger.info("运行 %s 已取消（action=%s）", run_id, action)
         return True

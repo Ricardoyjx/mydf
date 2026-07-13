@@ -1,3 +1,5 @@
+"""SSE 流式运行端点：接收请求、启动 agent、以 Server-Sent Events 返回结果。"""
+
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from app.gateway.routers.thread_runs import RunCreateRequest
@@ -11,11 +13,10 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 async def stateless_stream(
     body: RunCreateRequest, request: Request
 ) -> StreamingResponse:
-    """Create a run and stream events via SSE.
+    """创建一次运行并通过 SSE 流式返回事件。
 
-    If ``config.configurable.thread_id`` is provided, the run is created
-    on the given thread so that conversation history is preserved.
-    Otherwise a new temporary thread is created.
+    如果 ``config.configurable.thread_id`` 提供了线程 ID，则在该线程上创建运行以保留对话历史；
+    否则创建一个临时线程。
     """
 
     thread_id = "1"

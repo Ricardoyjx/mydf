@@ -1,3 +1,5 @@
+"""动态上下文注入中间件：每次模型调用前注入当前日期时间。"""
+
 from __future__ import annotations
 
 import logging
@@ -16,12 +18,8 @@ class DynamicContextMiddleware(AgentMiddleware):
     """在每次模型调用前，将当前日期作为 <system-reminder> 注入到首条 HumanMessage
     中，保持 system prompt 完全静态以最大化 prefix-cache 复用。
 
-    通过 `agent_name` 区分不同代理实例，`app_config` 保留供后续读取应用级
+    通过 ``agent_name`` 区分不同代理实例，``app_config`` 保留供后续读取应用级
     配置（如时区格式、记忆开关等）。
-
-    Args:
-        agent_name: 代理名称，用于日志标识和多代理场景区分。
-        app_config: 应用级配置对象，预留接口，暂未使用。
     """
 
     def __init__(
@@ -34,15 +32,12 @@ class DynamicContextMiddleware(AgentMiddleware):
 
     @property
     def name(self) -> str:
+        """返回中间件名称（含 agent 标识）。"""
         return f"DynamicContextMiddleware({self._agent_name or 'default'})"
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _build_reminder() -> str:
-        """构造 <system-reminder> XML 块，包含当前 UTC 时间。"""
+        """构造包含当前 UTC 时间的 <system-reminder> XML 块。"""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         return f"<system-reminder>\n当前日期 (UTC): {now}\n</system-reminder>"
 
@@ -53,8 +48,8 @@ class DynamicContextMiddleware(AgentMiddleware):
     ) -> list[Any] | None:
         """将 reminder 注入到列表中首条 HumanMessage 的 content 前。
 
-        Returns:
-            更新后的 messages 列表，若没有 HumanMessage 则返回 None。
+        返回：
+            更新后的 messages 列表；若没有 HumanMessage 则返回 None。
         """
         for msg in messages:
             if getattr(msg, "type", None) != "human":
@@ -70,10 +65,6 @@ class DynamicContextMiddleware(AgentMiddleware):
                 ]
             return messages
         return None
-
-    # ------------------------------------------------------------------
-    # AgentMiddleware hooks
-    # ------------------------------------------------------------------
 
     def before_model(
         self,

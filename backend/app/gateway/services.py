@@ -1,3 +1,5 @@
+"""运行管理服务：创建运行、消费 SSE 流、格式化 SSE 帧。"""
+
 import asyncio
 from datetime import datetime
 import json
@@ -17,22 +19,18 @@ async def start_run(
     thread_id: str,
     request: Request,
 ) -> RunRecord:
-    """Create a RunRecord and launch the background agent task.
+    """创建 RunRecord 并启动后台 agent 任务。
 
-    Parameters
-    ----------
-    body : RunCreateRequest
-        The validated request body (typed as Any to avoid circular import
-        with the router module that defines the Pydantic model).
-    thread_id : str
-        Target thread.
-    request : Request
-        FastAPI request — used to retrieve singletons from ``app.state``.
+    参数：
+        body:      验证后的请求体（类型标注为 Any 以避免与定义 Pydantic 模型的 router 模块产生循环导入）。
+        thread_id: 目标线程 ID。
+        request:   FastAPI 请求对象，用于从 ``app.state`` 获取单例。
     """
-    # run_mgr = get_run_manager(request)
+    # run_mgr = get_run_manager(request)  # 暂未启用持久化管理
 
     now = datetime.now().isoformat()
 
+    # 根据请求决定断开行为
     disconnect = (
         DisconnectMode.cancel
         if body.on_disconnect == "cancel"
@@ -57,6 +55,7 @@ async def start_run(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # 构造 agent 配置并启动后台运行
     agent_config: dict[str, Any] = {"recursion_limit": 100}
     if body.assistant_id:
         agent_config.setdefault("configurable", {})["assistant_id"] = body.assistant_id
@@ -75,6 +74,7 @@ async def start_run(
     return record
 
 
+# 流结束哨兵与心跳哨兵（与 stream_bridge/base.py 中的定义保持一致）
 HEARTBEAT_SENTINEL = StreamEvent(id="", event="__heartbeat__", data=None)
 END_SENTINEL = StreamEvent(id="", event="__end__", data=None)
 
@@ -85,48 +85,45 @@ async def see_consumer(
     request: Request,
     run_mgr: RunManager,
 ):
-    """Async generator that yields SSE frames from the bridge.
+    """异步生成器：从 bridge 读取事件并产出 SSE 格式字符串。
 
-    The ``finally`` block implements ``on_disconnect`` semantics:
-    - ``cancel``: abort the background task on client disconnect.
-    - ``continue``: let the task run; events are discarded.
+    ``finally`` 块实现了 ``on_disconnect`` 语义：
+    - ``cancel``：客户端断开时取消后台任务。
+    - ``continue``：让任务继续执行，事件被丢弃。
     """
     last_event_id = request.headers.get("Last-Event-ID")
     try:
         async for entry in bridge.subscribe(record.run_id, last_event_id=last_event_id):
+            # 客户端已断开则停止消费
             if await request.is_disconnected():
                 break
 
+            # 心跳哨兵 → 产出 SSE 注释行
             if entry is HEARTBEAT_SENTINEL:
                 yield ": heartbeat\n\n"
                 continue
 
+            # 结束哨兵 → 产出 end 事件并终止
             if entry is END_SENTINEL:
                 yield format_sse("end", None, event_id=entry.id or None)
                 return
 
+            # 普通事件 → 格式化后产出
             yield format_sse(entry.event, entry.data, event_id=entry.id or None)
 
     finally:
+        # 若运行仍在进行中且配置为取消，则终止任务
         if record.status in (RunStatus.pending, RunStatus.running):
             if record.on_disconnect == DisconnectMode.cancel:
                 await run_mgr.cancel(record.run_id)
 
 
 def build_run_config() -> dict[str, Any]:
-    """Build a RunnableConfig dict for the agent.
+    """构造 RunnableConfig 字典。
 
-    When *assistant_id* refers to a custom agent (anything other than
-    ``"lead_agent"`` / ``None``), the name is forwarded as ``agent_name`` in
-    whichever runtime options container is active: ``context`` for
-    LangGraph >= 0.6.0 requests, otherwise ``configurable``.
-    ``make_lead_agent`` reads this key to load the matching
-    ``agents/<name>/SOUL.md`` and per-agent config — without it the agent
-    silently runs as the default lead agent.
-
-    This mirrors the channel manager's ``_resolve_run_params`` logic so that
-    the LangGraph Platform-compatible HTTP API and the IM channel path behave
-    identically.
+    当 ``assistant_id`` 指向自定义 agent（非 ``"lead_agent"`` / ``None``）时，
+    将名称以 ``agent_name`` 形式传入运行配置，供 ``make_lead_agent`` 加载对应的
+    ``agents/<name>/SOUL.md`` 和 per-agent 配置。
     """
     config: dict[str, Any] = {"recursion_limit": 100}
 
@@ -134,11 +131,11 @@ def build_run_config() -> dict[str, Any]:
 
 
 def format_sse(event: str, data: Any, *, event_id: str | None = None) -> str:
-    """Format a single SSE frame.
+    """格式化单条 SSE 帧。
 
-    Field order: ``event:`` -> ``data:`` -> ``id:`` (optional) -> blank line.
-    This matches the LangGraph Platform wire format consumed by the
-    ``useStream`` React hook and the Python ``langgraph-sdk`` SSE decoder.
+    字段顺序：``event:`` → ``data:`` → ``id:``（可选）→ 空行。
+    与 LangGraph Platform 的 ``useStream`` React hook 和 Python ``langgraph-sdk``
+    SSE 解码器兼容。
     """
     payload = json.dumps(data, default=str, ensure_ascii=False)
     parts = [f"event: {event}", f"data: {payload}"]

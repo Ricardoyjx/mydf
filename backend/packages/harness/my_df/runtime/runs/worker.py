@@ -1,5 +1,7 @@
+"""Agent 运行器：在后台执行 LangGraph agent 并处理输出。"""
+
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
@@ -10,11 +12,10 @@ from my_df.runtime.stream_bridge.base import StreamBridge
 
 @dataclass(frozen=True)
 class RunContext:
-    """Infrastructure dependencies for a single agent run.
+    """单次 agent 运行的基础设施依赖。
 
-    Groups checkpointer, store, and persistence-related singletons so that
-    ``run_agent`` (and any future callers) receive one object instead of a
-    growing list of keyword arguments.
+    将 checkpointer、store 等持久化单例分组，
+    使 ``run_agent`` 不必接收不断增长的参数列表。
     """
 
     checkpointer: Any
@@ -30,12 +31,12 @@ async def run_agent_mini(
     graph_input: dict,
     config: dict,
 ) -> None:
-
-    # agent = agent_factory(config=config)
+    """简化版 Agent 运行器：遍历 astream 输出并处理每个 chunk。"""
 
     async for chunk in agent_factory.astream(graph_input, config=config):
         process_chunk(chunk)
 
 
 def process_chunk(chunk: dict):
+    """处理单个 agent 输出 chunk（当前实现仅打印）。"""
     print(chunk)

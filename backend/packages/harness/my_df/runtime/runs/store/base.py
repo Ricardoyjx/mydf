@@ -1,11 +1,11 @@
-"""Abstract interface for run metadata storage.
+"""运行存储的抽象接口。
 
-RunManager depends on this interface. Implementations:
-- MemoryRunStore: in-memory dict (development, tests)
-- Future: RunRepository backed by SQLAlchemy ORM
+RunManager 依赖此接口。实现类：
+- MemoryRunStore：基于内存字典（开发、测试）
+- 未来：基于 SQLAlchemy ORM 的 RunRepository
 
-All methods accept an optional user_id for user isolation.
-When user_id is None, no user filtering is applied (single-user mode).
+所有方法接受可选的 user_id 参数以实现用户隔离。
+当 user_id 为 None 时不进行用户过滤（单用户模式）。
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from typing import Any
 
 
 class RunStore(abc.ABC):
+    """运行记录的持久化存储抽象基类。"""
+
     @abc.abstractmethod
     async def put(
         self,
@@ -31,6 +33,7 @@ class RunStore(abc.ABC):
         error: str | None = None,
         created_at: str | None = None,
     ) -> None:
+        """写入一条运行记录。"""
         pass
 
     @abc.abstractmethod
@@ -40,6 +43,7 @@ class RunStore(abc.ABC):
         *,
         user_id: str | None = None,
     ) -> dict[str, Any] | None:
+        """查询单条运行记录。"""
         pass
 
     @abc.abstractmethod
@@ -50,6 +54,7 @@ class RunStore(abc.ABC):
         user_id: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        """按线程列出运行记录。"""
         pass
 
     @abc.abstractmethod
@@ -60,15 +65,16 @@ class RunStore(abc.ABC):
         *,
         error: str | None = None,
     ) -> bool | None:
-        """Update a run status.
+        """更新运行状态。
 
-        Returns ``False`` when the store can prove no row was updated. Older or
-        lightweight stores may return ``None`` when they cannot report rowcount.
+        返回 ``False`` 表示存储可以证明没有行被更新；
+        轻量级或旧版存储可能返回 ``None``（无法报告行数）。
         """
         pass
 
     @abc.abstractmethod
     async def delete(self, run_id: str) -> None:
+        """删除运行记录。"""
         pass
 
     @abc.abstractmethod
@@ -77,7 +83,7 @@ class RunStore(abc.ABC):
         run_id: str,
         model_name: str | None,
     ) -> None:
-        """Update the model_name field for an existing run."""
+        """更新已有运行的 model_name 字段。"""
         pass
 
     @abc.abstractmethod
@@ -98,10 +104,7 @@ class RunStore(abc.ABC):
         first_human_message: str | None = None,
         error: str | None = None,
     ) -> bool | None:
-        """Persist final completion fields.
-
-        Returns ``False`` when the store can prove no row was updated.
-        """
+        """持久化最终完成状态字段。"""
         pass
 
     async def update_run_progress(
@@ -119,26 +122,27 @@ class RunStore(abc.ABC):
         last_ai_message: str | None = None,
         first_human_message: str | None = None,
     ) -> None:
-        """Persist a best-effort running snapshot without changing run status."""
+        """运行时进度快照（尽力而为，不改变运行状态）。"""
         return None
 
     @abc.abstractmethod
     async def list_pending(self, *, before: str | None = None) -> list[dict[str, Any]]:
+        """列出指定时间之前的待处理运行。"""
         pass
 
     @abc.abstractmethod
     async def list_inflight(self, *, before: str | None = None) -> list[dict[str, Any]]:
-        """Return persisted runs that are still ``pending`` or ``running``."""
+        """返回仍处于 ``pending`` 或 ``running`` 状态的已持久化运行。"""
         pass
 
     @abc.abstractmethod
     async def aggregate_tokens_by_thread(
         self, thread_id: str, *, include_active: bool = False
     ) -> dict[str, Any]:
-        """Aggregate token usage for completed runs in a thread.
+        """聚合指定线程中已完成运行的 token 用量。
 
-        Returns a dict with keys: total_tokens, total_input_tokens,
-        total_output_tokens, total_runs, by_model (model_name → {tokens, runs}),
-        by_caller ({lead_agent, subagent, middleware}).
+        返回字典包含：
+        total_tokens, total_input_tokens, total_output_tokens, total_runs,
+        by_model（model_name → {tokens, runs}）, by_caller（lead_agent/subagent/middleware）。
         """
         pass
