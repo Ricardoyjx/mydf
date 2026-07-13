@@ -31,9 +31,9 @@ async def run_agent_mini(
     config: dict,
 ) -> None:
 
-    agent = agent_factory(config=config)
+    # agent = agent_factory(config=config)
 
-    async for chunk in agent.astream(graph_input, config=config):
+    async for chunk in agent_factory.astream(graph_input, config=config):
         process_chunk(chunk)
 
 
