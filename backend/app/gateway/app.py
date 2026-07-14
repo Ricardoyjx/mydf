@@ -9,8 +9,7 @@ def create_app() -> FastAPI:
 
     app.include_router(runs_router)
 
-    if _os.getenv("MYDF_DEBUG"):
-        _setup_debug(app)
+    _setup_debug(app)
 
     @app.get("/health", tags=["health"])
     def get_health():
@@ -104,7 +103,13 @@ def _setup_debug(app: FastAPI) -> None:
     import app.gateway.services as svc
     import app.gateway.routers.runs as rtr
 
-    async def _debug_start_run(body, thread_id: str, request):
+    async def _debug_start_run(
+        body,
+        thread_id: str,
+        request,
+        context,
+        bridge,
+    ):
         run_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
 

@@ -23,7 +23,13 @@ async def stateless_stream(
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
     run_context = get_run_context(request)
-    record = await start_run(body, thread_id, request, run_context, bridge)
+    record = await start_run(
+        body=body,
+        thread_id=thread_id,
+        request=request,
+        context=run_context,
+        bridge=bridge,
+    )
 
     return StreamingResponse(
         see_consumer(bridge, record, request, run_mgr),

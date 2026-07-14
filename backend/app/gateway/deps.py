@@ -80,7 +80,7 @@ def get_run_context(request: Request) -> RunContext:
         store=getattr(request.app.state, "store", None),
         # event_store=get_run_event_store(request),
         event_store=getattr(request.app.state, "event_store", None),
-        run_events_config=getattr(request.app.state, "run_events_config"),
+        run_events_config=getattr(request.app.state, "run_events_config", None),
         # thread_store=get_thread_store(request),
         app_config=get_app_config(),
     )
