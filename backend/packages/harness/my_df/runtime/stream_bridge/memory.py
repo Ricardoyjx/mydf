@@ -85,3 +85,12 @@ class InMemoryStreamBridge(StreamBridge):
     async def cleanup(self, run_id: str, *, delay: float = 0) -> None:
         """清理指定 run_id 的队列资源。"""
         self._queues.pop(run_id, None)
+
+    async def close(self) -> None:
+        """释放所有队列资源。
+
+        清空所有未消费的事件队列，防止内存泄漏。
+        由 make_stream_bridge 的 finally 块调用。
+        """
+        self._queues.clear()
+
