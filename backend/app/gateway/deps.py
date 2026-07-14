@@ -4,17 +4,16 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 import logging
 from my_df.agents.config.app_config import AppConfig, get_app_config
-from my_df.agents.config.stream_bridge_config import get_stream_bridge_config
 from my_df.runtime.checkpointer.async_provider import make_checkpointer
-from my_df.runtime.events.store.base import RunEventStore
 from my_df.runtime.runs.manager import RunManager
 from fastapi import FastAPI, HTTPException, Request
-from typing import AsyncGenerator, AsyncIterator, TypeVar, cast
+from typing import AsyncGenerator, TypeVar, cast
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from my_df.runtime.runs.store.base import RunStore
 from my_df.runtime.runs.store.memory import MemoryRunStore
 from my_df.runtime.runs.worker import RunContext
 from my_df.runtime.store.async_provider import make_store
+from my_df.runtime.stream_bridge.async_provider import make_stream_bridge
 from my_df.runtime.stream_bridge.base import StreamBridge
 
 T = TypeVar("T")
@@ -69,38 +68,6 @@ async def langgraph_runtime(
         yield
 
 
-@asynccontextmanager
-async def make_stream_bridge(
-    app_config: AppConfig | None = None,
-) -> AsyncIterator[StreamBridge]:
-    """Async context manager that yields a :class:`StreamBridge`.
-
-    Falls back to :class:`MemoryStreamBridge` when no configuration is
-    provided and nothing is set globally.
-    """
-    if app_config is None:
-        config = get_stream_bridge_config()
-    else:
-        config = app_config.stream_bridge
-
-    if config is None or config.type == "memory":
-        from my_df.runtime.stream_bridge.memory import InMemoryStreamBridge
-
-        maxsize = config.queue_maxsize if config is not None else 256
-        bridge = InMemoryStreamBridge(queue_maxsize=maxsize)
-        logger.info("Stream bridge initialised: memory (queue_maxsize=%d)", maxsize)
-        try:
-            yield bridge
-        finally:
-            await bridge.close()
-        return
-
-    if config.type == "redis":
-        raise NotImplementedError("Redis stream bridge planned for Phase 2")
-
-    raise ValueError(f"Unknown stream bridge type: {config.type!r}")
-
-
 def _require(attr: str, label: str) -> Callable[[Request], T]:  # type: ignore
     """工厂函数：生成一个 FastAPI 依赖，从 ``app.state.<attr>`` 取值。
 
@@ -135,9 +102,9 @@ get_run_manager: Callable[[Request], RunManager] = _require(
 get_checkpointer: Callable[[Request], Checkpointer] = _require(
     "checkpointer", "Checkpointer"
 )
-get_run_event_store: Callable[[Request], RunEventStore] = _require(
-    "run_event_store", "Run event store"
-)
+# get_run_event_store: Callable[[Request], RunEventStore] = _require(
+#     "run_event_store", "Run event store"
+# )
 # get_feedback_repo: Callable[[Request], FeedbackRepository] = _require(
 #     "feedback_repo", "Feedback"
 # )

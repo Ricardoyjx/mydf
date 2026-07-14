@@ -3,7 +3,8 @@
 import asyncio
 from datetime import datetime
 import json
-from typing import Any
+import re
+from typing import Any, Mapping
 import uuid
 
 from my_df.agents.lead_agent.agent import make_lead_agent
@@ -43,7 +44,7 @@ async def start_run(
         record = RunRecord(
             run_id=run_id,
             thread_id=thread_id,
-            assistant_id="assistant_id",
+            assistant_id=body.assistant_id,
             status=RunStatus.pending,
             on_disconnect=disconnect,
             multitask_strategy="rollback",
@@ -62,7 +63,12 @@ async def start_run(
         agent_config.setdefault("configurable", {})["assistant_id"] = body.assistant_id
     agent_factory = make_lead_agent(agent_config)  # type: ignore
     graph_input = body.input
-    config = build_run_config()
+    config = build_run_config(
+        thread_id=thread_id,
+        request_config=body.config,
+        metadata=record.metadata,
+        assistant_id=body.assistant_id,
+    )
     task = asyncio.create_task(
         run_agent_mini(
             agent_factory=agent_factory,
@@ -122,7 +128,15 @@ async def see_consumer(
                 await run_mgr.cancel(record.run_id)
 
 
-def build_run_config() -> dict[str, Any]:
+_DEFAULT_ASSISTANT_ID = "lead_agent"
+
+
+def build_run_config(
+    thread_id: str,
+    request_config: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+    assistant_id: str | None = None,
+) -> dict[str, Any]:
     """构造 RunnableConfig 字典。
 
     当 ``assistant_id`` 指向自定义 agent（非 ``"lead_agent"`` / ``None``）时，
@@ -130,8 +144,56 @@ def build_run_config() -> dict[str, Any]:
     ``agents/<name>/SOUL.md`` 和 per-agent 配置。
     """
     config: dict[str, Any] = {"recursion_limit": 100}
+    if request_config:
+        if "context" in request_config:
+            context_value = request_config["context"]
+            if context_value is None:
+                context = {}
+            elif isinstance(context_value, Mapping):
+                context = dict(context_value)
+            else:
+                raise ValueError("Invalid context value")
+            config["context"] = context
+        else:
+            configurable = {"thread_id": thread_id}
+            configurable.update(request_config.get("configurable", {}))
+            config["configurable"] = configurable
+        for k, v in request_config.items():
+            if k not in ("configurable", "context"):
+                config[k] = v
+    else:
+        config["configurable"] = {"thread_id": thread_id}
 
+    # Inject custom agent name when the caller specified a non-default assistant.
+    # Honour an explicit agent_name in the active runtime options container.
+    if assistant_id and assistant_id != _DEFAULT_ASSISTANT_ID:
+        normalized = assistant_id.strip().lower().replace("_", "-")
+        if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
+            raise ValueError(
+                f"Invalid assistant_id {assistant_id!r}: must contain only letters, digits, and hyphens after normalization."
+            )
+        if "configurable" in config:
+            target = config["configurable"]
+        elif "context" in config:
+            target = config["context"]
+        else:
+            target = config.setdefault("configurable", {})
+        if target is not None and "agent_name" not in target:
+            target["agent_name"] = normalized
+        config.setdefault("run_name", resolve_root_run_name(config, normalized))
+    if metadata:
+        config.setdefault("metadata", {}).update(metadata)
     return config
+
+
+def resolve_root_run_name(config: Mapping[str, Any], assistant_id: str | None) -> str:
+    for container_name in ("context", "configurable"):
+        container = config.get(container_name)
+        if isinstance(container, Mapping):
+            agent_name = container.get("agent_name")
+            if isinstance(agent_name, str) and agent_name.strip():
+                return agent_name
+    return assistant_id or "lead_agent"
 
 
 def format_sse(event: str, data: Any, *, event_id: str | None = None) -> str:
