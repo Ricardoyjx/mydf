@@ -13,7 +13,7 @@ from typing import Any
 import uuid
 
 from my_df.runtime.stream_bridge.base import (
-    END_SENTINEL,      # 流结束哨兵
+    END_SENTINEL,  # 流结束哨兵
     HEARTBEAT_SENTINEL,  # 心跳哨兵（超时时发出）
     StreamBridge,
     StreamEvent,
@@ -27,9 +27,10 @@ class InMemoryStreamBridge(StreamBridge):
     生产者与消费者通过队列解耦。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, queue_maxsize: int = 256) -> None:
         # run_id -> asyncio.Queue[StreamEvent]
         self._queues: dict[str, asyncio.Queue[StreamEvent]] = {}
+        self._maxsize = queue_maxsize
 
     async def publish(self, run_id: str, event: str, data: Any) -> None:
         """生产者：向指定 run_id 的队列写入一条事件。"""

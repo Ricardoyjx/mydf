@@ -1,17 +1,104 @@
 """FastAPI 依赖注入工具，从 app.state 中获取共享实例。"""
 
 from collections.abc import Callable
-from my_df.agents.config.app_config import get_app_config
+from contextlib import AsyncExitStack, asynccontextmanager
+import logging
+from my_df.agents.config.app_config import AppConfig, get_app_config
+from my_df.agents.config.stream_bridge_config import get_stream_bridge_config
+from my_df.runtime.checkpointer.async_provider import make_checkpointer
 from my_df.runtime.events.store.base import RunEventStore
 from my_df.runtime.runs.manager import RunManager
-from fastapi import HTTPException, Request
-from typing import TypeVar, cast
+from fastapi import FastAPI, HTTPException, Request
+from typing import AsyncGenerator, AsyncIterator, TypeVar, cast
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from my_df.runtime.runs.store.base import RunStore
+from my_df.runtime.runs.store.memory import MemoryRunStore
 from my_df.runtime.runs.worker import RunContext
+from my_df.runtime.store.async_provider import make_store
 from my_df.runtime.stream_bridge.base import StreamBridge
 
 T = TypeVar("T")
+
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def langgraph_runtime(
+    app: FastAPI, startup_config: AppConfig
+) -> AsyncGenerator[None, None]:
+    """引导并拆除所有 Lang Graph 运行时单例
+
+    “启动配置”是“应用程序配置”期间拍摄的快照
+    一次性基础设施引导程序的“lifespan ()” 引擎和
+    此处构建的存储（流桥、持久化引擎、检查点、
+    store 、 run event store ）是设计所要求的重新启动 - 它们保持活动状态
+    连接、文件句柄或单例提供程序 - 因此它们绑定到此
+    快照并在“config yaml”编辑中生存请求时间消费者
+    仍然必须通过 :func :`get config ` 对于任何应该是的字段
+    可热重载 请参阅``backend /CLAUDE md ``“配置热重载边界”
+
+    匹配的“运行事件配置”被冻结到“应用程序状态”，因此
+    :func :`get run context ` 将新加载的 ``App Config `` 与
+    *启动时间*运行事件配置底层``事件存储``
+    是从构建的 - 否则运行时可能最终会结合实时
+    新的“运行事件配置”，事件存储仍然绑定到
+    以前的后端
+
+    在``app py``中的用法::
+
+        与 langgraph 运行时异步（应用程序，启动配置）：
+            产量 = yield
+    """
+    async with AsyncExitStack() as stack:
+        config = startup_config
+        app.state.stream_bridge = await stack.enter_async_context(
+            make_stream_bridge(config)
+        )
+
+        app.state.checkpointer = await stack.enter_async_context(
+            make_checkpointer(config)
+        )
+
+        app.state.store = await stack.enter_async_context(make_store(config))
+
+        app.state.run_store = MemoryRunStore()
+
+        app.state.run_manager = RunManager(store=app.state.run_store)
+
+        yield
+
+
+@asynccontextmanager
+async def make_stream_bridge(
+    app_config: AppConfig | None = None,
+) -> AsyncIterator[StreamBridge]:
+    """Async context manager that yields a :class:`StreamBridge`.
+
+    Falls back to :class:`MemoryStreamBridge` when no configuration is
+    provided and nothing is set globally.
+    """
+    if app_config is None:
+        config = get_stream_bridge_config()
+    else:
+        config = app_config.stream_bridge
+
+    if config is None or config.type == "memory":
+        from my_df.runtime.stream_bridge.memory import InMemoryStreamBridge
+
+        maxsize = config.queue_maxsize if config is not None else 256
+        bridge = InMemoryStreamBridge(queue_maxsize=maxsize)
+        logger.info("Stream bridge initialised: memory (queue_maxsize=%d)", maxsize)
+        try:
+            yield bridge
+        finally:
+            await bridge.close()
+        return
+
+    if config.type == "redis":
+        raise NotImplementedError("Redis stream bridge planned for Phase 2")
+
+    raise ValueError(f"Unknown stream bridge type: {config.type!r}")
 
 
 def _require(attr: str, label: str) -> Callable[[Request], T]:  # type: ignore
