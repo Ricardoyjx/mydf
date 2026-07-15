@@ -31,7 +31,8 @@ async def run_agent_mini(
     context: RunContext,
 ) -> None:
     """简化版 Agent 运行器：遍历 astream 输出并处理每个 chunk。"""
-
+    if context.checkpointer is not None:
+        agent_factory.checkpointer = context.checkpointer
     async for chunk in agent_factory.astream(graph_input, config=config):
         await process_chunk(bridge, run_id, chunk)
 

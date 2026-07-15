@@ -3,6 +3,8 @@ import logging
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from my_df.agents.config.app_config import get_app_config
 from app.gateway.routers.runs import router as runs_router
 from app.gateway.config import get_gateway_config
@@ -45,6 +47,11 @@ def create_app() -> FastAPI:
     app = FastAPI(lifespan=lifespan)
 
     app.include_router(runs_router)
+
+    # 挂载静态文件，提供前端交互页面
+    # frontend/ 目录位于项目根目录
+    frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend"
+    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
     @app.get("/health", tags=["health"])
     def get_health():
