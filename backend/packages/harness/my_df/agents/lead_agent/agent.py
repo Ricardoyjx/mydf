@@ -1,11 +1,12 @@
 """Lead Agent 工厂：构建具备完整中间件链的默认 Agent。"""
 
+import logging
+
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain.tools import BaseTool
 from langchain_core.runnables import RunnableConfig
 
-from my_df.agents.config.model_config import ModelConfig
 from my_df.agents.thread_state import ThreadState
 from my_df.models.factory import create_chat_model
 from my_df.agents.config.app_config import AppConfig, get_app_config
@@ -14,6 +15,8 @@ from my_df.agents.middlewares.dynamic_context_middleware import DynamicContextMi
 from my_df.agents.middlewares.runtime_middlewares import (
     build_lead_runtime_middlewares,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _get_runtime_config(config: RunnableConfig) -> dict:
@@ -25,17 +28,6 @@ def _get_runtime_config(config: RunnableConfig) -> dict:
     return cfg
 
 
-# 中间件链构建函数 — 以下注释规定了各中间件的注册顺序约束
-# ThreadDataMiddleware 必须在 SandboxMiddleware 之前，确保 thread_id 可用
-# UploadsMiddleware 应在 ThreadDataMiddleware 之后，以获得 thread_id
-# DanglingToolCallMiddleware 在模型看到历史前修补缺失的 ToolMessages
-# SummarizationMiddleware 应尽早执行以减少上下文长度
-# TodoListMiddleware 应在 ClarificationMiddleware 之前，允许待办管理
-# TitleMiddleware 在首次对话后生成标题
-# MemoryMiddleware 在 TitleMiddleware 之后加入对话记忆队列
-# ViewImageMiddleware 应在 ClarificationMiddleware 之前注入图像详情
-# ToolErrorHandlingMiddleware 应在 ClarificationMiddleware 之前转换工具异常
-# ClarificationMiddleware 应始终在最后，截获模型调用后的澄清请求
 def _build_middlewares(
     config: RunnableConfig,
     model_name: str | None,
@@ -46,27 +38,38 @@ def _build_middlewares(
 ):
     """根据运行时配置构建中间件链。
 
+    中间件注册顺序（高优先级在前）：
+    1. 运行时基础中间件（预留扩展）
+    2. DynamicContextMiddleware：每次模型调用前注入当前日期时间
+    3. TodoMiddleware：仅 ``is_plan_mode=True`` 时注册（通过环境变量 MYDF_IS_PLAN_MODE 控制）
+
     参数：
         config:            运行配置，包含 is_plan_mode 等可配置选项。
         model_name:        当前模型名称（用于中间件中的模型感知逻辑）。
-        agent_name:        代理名称（MemoryMiddleware 用于按代理隔离记忆）。
+        agent_name:        代理名称（用于中间件实例标识）。
         custom_middlewares: 可选的自定义中间件列表，注入到链中。
+        app_config:        应用配置（用于读取 is_plan_mode 等）。
 
     返回：
         中间件实例列表。
     """
     middlewares = build_lead_runtime_middlewares(lazy_init=True)
+
     # DynamicContextMiddleware：每次模型调用前注入当前日期时间
     middlewares.append(
         DynamicContextMiddleware(agent_name=agent_name, app_config=app_config)
     )
 
     # 若启用计划模式，添加 TodoMiddleware
+    # 优先级：config 中的 is_plan_mode > app_config 中的 is_plan_mode > False
     cfg = _get_runtime_config(config)
-    is_plan_mode = cfg.get("is_plan_mode", False)
+    is_plan_mode = cfg.get(
+        "is_plan_mode",
+        app_config.is_plan_mode if app_config is not None else False,
+    )
     todo_list_middleware = _create_todo_list_middleware(is_plan_mode)
     if todo_list_middleware is not None:
-        middlewares.append(todo_list_middleware)  # type: ignore
+        middlewares.append(todo_list_middleware)
 
     return middlewares
 
@@ -153,38 +156,44 @@ def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
 
 
 def make_lead_agent(config: RunnableConfig):
-    """Lead Agent 工厂入口函数，保持与 LangGraph Server 兼容的签名。"""
+    """Lead Agent 工厂入口函数。
+
+    从 config 或全局配置中获取 app_config 并传递给核心工厂。
+    与 LangGraph Server 兼容的签名。
+    """
     runtime_config = _get_runtime_config(config)
     runtime_app_config = runtime_config.get("app_config")
     return _make_lead_agent(config, app_config=runtime_app_config or get_app_config())
 
 
 def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
-    """Lead Agent 核心工厂：解析运行时配置 → 创建模型 → 组装工具链 → 创建 Agent。"""
-    model_name = "deepseek-v4-flash"
+    """Lead Agent 核心工厂。
+
+    解析运行时配置 → 从 ``app_config`` 获取模型配置 → 组装工具链 → 创建 Agent。
+    """
     agent_name = "lead_agent"
+
+    # 从 app_config 中获取第一个可用模型配置
+    if not app_config.models:
+        logger.warning(
+            "未配置模型（app_config.models 为空），"
+            "请检查 .env 中的 %s 或 DEEPSEEK_API_KEY 环境变量。",
+            "MYDF_LLM_API_KEY",
+        )
 
     tools: list[BaseTool] = []
 
     return create_agent(
         model=create_chat_model(
-            name=model_name,
+            name=None,  # 使用 app_config 中第一个模型
             thinking_enable=False,
-            app_config=AppConfig(
-                models=[
-                    ModelConfig(
-                        name="deepseek-v4-flash",
-                        model="deepseek-v4-flash",
-                        use="langchain_deepseek.ChatDeepSeek",
-                    ),
-                ]
-            ),
+            app_config=app_config,
             attach_tracing=False,
         ),
         tools=tools,
         middleware=_build_middlewares(
             config,
-            model_name=model_name,
+            model_name=app_config.models[0].name if app_config.models else None,
             agent_name=agent_name,
             app_config=app_config,
         ),
