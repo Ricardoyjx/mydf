@@ -483,7 +483,8 @@ async function sendMessage(userText){
   const assistantBubble = addMsg('assistant', '', {id: assistantMsgId});
   const cursorSpan = document.createElement('span');
   cursorSpan.className = 'stream-cursor';
-  assistantBubble.parentElement.querySelector('.msg-bubble').appendChild(cursorSpan);
+  const bubbleEl = assistantBubble.parentElement;
+  if (bubbleEl) bubbleEl.appendChild(cursorSpan);
 
   inputEl.disabled = true;
   sendBtn.disabled = true;
