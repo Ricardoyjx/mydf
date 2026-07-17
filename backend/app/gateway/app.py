@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from my_df.agents.config.app_config import get_app_config
 from app.gateway.routers.runs import router as runs_router
+from app.gateway.routers.memory import router as memory_router
 from app.gateway.config import get_gateway_config
 from app.gateway.deps import langgraph_runtime
 
@@ -56,6 +57,8 @@ def create_app() -> FastAPI:
 
     # API 路由
     app.include_router(runs_router)
+
+    app.include_router(memory_router)
 
     # 前端页面（SPA 单页入口）
     frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend"
