@@ -9,6 +9,7 @@
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -97,8 +98,37 @@ async def run_agent_mini(
 async def process_chunk(bridge: StreamBridge, run_id: str, chunk: dict):
     """处理单个 agent 输出 chunk。
 
-    将 chunk 发布到 bridge 供 SSE 消费者读取。
+    astream stream_mode="updates" 格式为 ``{node_name: output}``。
+    只关注名为 ``"model"`` 的节点（真正的 LLM 调用输出），
+    跳过中间件注入（MemoryMiddleware、DynamicContextMiddleware）。
     """
-    await bridge.publish(run_id, "updates", chunk)
-    # 开发期打印便于调试，生产环境应使用 logging
-    logger.debug("chunk for run %s: %s", run_id, chunk)
+    try:
+        for node_name, output in chunk.items():
+            # 只处理 model 节点的输出（真正的 AI 回复）
+            if node_name != "model":
+                continue
+            if not isinstance(output, dict):
+                continue
+
+            messages = output.get("messages")
+            if not messages or len(messages) == 0:
+                continue
+
+            last = messages[-1]
+            # 优先 .content 属性
+            text = getattr(last, "content", None)
+            if text:
+                await bridge.publish(run_id, "updates", str(text))
+                logger.debug("published from %s: %s", node_name, str(text)[:80])
+                return
+            # 回退：str() 后正则提取
+            raw = str(last)
+            m = re.search(r"content='([^']*)'", raw)
+            if m:
+                await bridge.publish(run_id, "updates", m.group(1))
+                return
+            # 最终回退：发原始字符串
+            await bridge.publish(run_id, "updates", raw[:200])
+    except Exception as e:
+        logger.error("process_chunk error: %s", e, exc_info=True)
+        await bridge.publish(run_id, "error", {"message": f"process_chunk: {e}"})

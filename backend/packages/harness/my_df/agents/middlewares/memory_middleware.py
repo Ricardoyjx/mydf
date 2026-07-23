@@ -100,18 +100,42 @@ def _inject_into_first_human(
     return None
 
 
-def _extract_conversation_summary(messages: list[Any], max_turns: int = 3) -> str:
-    """从最近几轮对话中提取简短摘要。
+def _extract_conversation_summary(messages: list[Any], max_turns: int = 20) -> str:
+    """从对话记录中提取 user ↔ assistant 交换摘要。
 
-    取最后 *max_turns* 轮 user ↔ assistant 交换，每行一条。
+    自动过滤中间件注入的系统内容（<system-reminder>、<memory_context>），
+    只保留真实的用户消息和 AI 回复。
+    取最后 *max_turns* 轮（默认 20 轮，覆盖较长对话）。
     """
+    import re
+
+    _SYSTEM_BLOCKS_RE = re.compile(
+        r"<system-reminder>.*?</system-reminder>|"
+        r"<memory_context>.*?</memory_context>",
+        re.DOTALL,
+    )
+
     turns: list[str] = []
     for msg in messages[-max_turns * 2 :]:
         role = getattr(msg, "type", "")
-        content = getattr(msg, "content", "")
-        if role in ("human", "ai"):
-            preview = str(content)[:120].replace("\n", " ")
-            turns.append(f"[{role}] {preview}")
+        raw = str(getattr(msg, "content", ""))
+
+        # 跳过纯系统/中间件消息
+        if role not in ("human", "ai"):
+            continue
+        # 检查 hide_from_ui 标记
+        kw = getattr(msg, "additional_kwargs", {}) or {}
+        if kw.get("hide_from_ui"):
+            continue
+
+        # 去除注入的系统块
+        cleaned = _SYSTEM_BLOCKS_RE.sub("", raw).strip()
+        if not cleaned:
+            continue
+
+        # 截取合理长度，去换行
+        preview = cleaned[:2000].replace("\n", " ").replace("\r", "")
+        turns.append(f"[{role}] {preview}")
     return "\n".join(turns)
 
 
@@ -119,17 +143,15 @@ class MemoryMiddleware(AgentMiddleware):
     """在模型调用前后同步记忆上下文。
 
     - ``before_model``：从存储加载 memory，注入到首条 HumanMessage。
-    - ``after_model``：将最近对话写入 memory 的 workContext。
+    - ``after_model``：将最近对话写入 memory 的 history.recentMonths。
     """
-
-    state_schema: type | None = None  # 不限定 state schema，通用中间件
 
     def __init__(
         self,
         agent_name: str | None = None,
         user_id: str = "default",
     ) -> None:
-        self._agent_name = agent_name
+        self._agent_name = (agent_name or "").replace("_", "-") or None
         self._user_id = user_id
         self._storage = get_memory_storage()
         logger.info(
@@ -203,11 +225,11 @@ class MemoryMiddleware(AgentMiddleware):
             if not memory:
                 return None
 
-            # 更新用户上下文中的 workContext
+            # 更新历史上下文中的 recentMonths（最近对话摘要）
             summary = _extract_conversation_summary(messages)
-            if "user" not in memory:
-                memory["user"] = {}
-            memory["user"]["workContext"] = {
+            if "history" not in memory:
+                memory["history"] = {}
+            memory["history"]["recentMonths"] = {
                 "summary": summary,
                 "updatedAt": utc_now_iso_z(),
             }

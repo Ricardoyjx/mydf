@@ -403,166 +403,162 @@ body::before{
 <div class="event-log" id="event-log"></div>
 
 <script>
-(function(){
 'use strict';
 
-// ── DOM ──
+// =============================================================
+// DOM 引用
+// =============================================================
 const msgEl = document.getElementById('messages');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send-btn');
 const threadIdEl = document.getElementById('thread-id');
 const assistantIdEl = document.getElementById('assistant-id');
-const logEl = document.getElementById('event-log');
-const logToggle = document.getElementById('log-toggle');
-const clearBtn = document.getElementById('clear-btn');
 const statusBadge = document.getElementById('status-badge');
 
-let currentRunId = null;
 let abortController = null;
-let currentAssistantMsgId = null; // 用于流式追加
 
-// ── 工具 ──
-function genId(){return crypto.randomUUID?.() || Math.random().toString(36).slice(2)}
-
-function scrollBottom(){
-  requestAnimationFrame(()=>{msgEl.scrollTop = msgEl.scrollHeight})
+// =============================================================
+// 工具函数
+// =============================================================
+function genId() {
+  return crypto.randomUUID?.() || Math.random().toString(36).slice(2);
 }
 
-function addMsg(role, content, opts={}){
+function scrollBottom() {
+  requestAnimationFrame(() => { msgEl.scrollTop = msgEl.scrollHeight; });
+}
+
+function setStatus(text, color) {
+  statusBadge.textContent = text;
+  statusBadge.style.color = color || 'var(--text-secondary)';
+}
+
+// =============================================================
+// 消息渲染
+// =============================================================
+function addMessage(role, text, opts = {}) {
   const div = document.createElement('div');
   div.className = `msg ${role}`;
-  if(opts.id) div.dataset.msgId = opts.id;
+  if (opts.id) div.dataset.msgId = opts.id;
 
+  // 头像
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
   avatar.textContent = role === 'user' ? 'U' : role === 'assistant' ? 'AI' : '•';
   div.appendChild(avatar);
 
+  // 气泡
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble';
-  if(opts.badge){
-    const badge = document.createElement('span');
-    badge.className = `event-badge ${opts.badge}`;
-    badge.textContent = opts.badge;
-    bubble.appendChild(badge);
-  }
+
   const contentSpan = document.createElement('span');
   contentSpan.className = 'stream-content';
-  contentSpan.textContent = content;
+  contentSpan.textContent = text || '';
   bubble.appendChild(contentSpan);
+
+  // 光标（仅 assistant 流式输出时显示）
+  if (role === 'assistant' && opts.showCursor) {
+    const cursor = document.createElement('span');
+    cursor.className = 'stream-cursor';
+    bubble.appendChild(cursor);
+  }
 
   div.appendChild(bubble);
   msgEl.appendChild(div);
   scrollBottom();
-  return contentSpan;
+  return contentSpan;  // 返回内容 span 供后续更新
 }
 
-function setStatus(text, color){
-  statusBadge.textContent = text;
-  statusBadge.style.color = color || 'var(--text-secondary)';
-}
+// =============================================================
+// SSE 流式请求
+// =============================================================
+async function sendMessage(userText) {
+  if (!userText.trim()) return;
+  if (sendBtn.disabled) return;
 
-function addLog(text, cls=''){
-  const line = document.createElement('div');
-  line.className = 'line';
-  line.innerHTML = `<span class="evt ${cls}">${text}</span>`;
-  logEl.appendChild(line);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-// ── SSE 解析 ──
-async function sendMessage(userText){
-  if(!userText.trim()) return;
-
-  // 显示用户消息
-  const userMsgId = genId();
-  addMsg('user', userText, {id: userMsgId});
-
-  // 准备 assistant 占位
-  const assistantMsgId = genId();
-  const assistantBubble = addMsg('assistant', '', {id: assistantMsgId});
-  const cursorSpan = document.createElement('span');
-  cursorSpan.className = 'stream-cursor';
-  const bubbleEl = assistantBubble.parentElement;
-  if (bubbleEl) bubbleEl.appendChild(cursorSpan);
-
+  // 锁定 UI
   inputEl.disabled = true;
   sendBtn.disabled = true;
-  setStatus('运行中…', 'var(--accent)');
+  setStatus('发送中…', 'var(--accent)');
+
+  // 显示用户消息
+  addMessage('user', userText);
+
+  // 创建 assistant 占位
+  const contentSpan = addMessage('assistant', '', { showCursor: true });
 
   const threadId = threadIdEl.value.trim() || genId();
-  if(!threadIdEl.value.trim()) threadIdEl.value = threadId;
+  if (!threadIdEl.value.trim()) threadIdEl.value = threadId;
 
   abortController = new AbortController();
 
   try {
     const resp = await fetch('/api/runs/stream', {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         assistant_id: assistantIdEl.value.trim() || 'lead_agent',
-        input: {messages: [{role:'user', content: userText}]},
-        config: {configurable: {thread_id: threadId}},
+        input: { messages: [{ role: 'user', content: userText }] },
+        config: { configurable: { thread_id: threadId } },
       }),
       signal: abortController.signal,
     });
 
-    if(!resp.ok){
-      const errBody = await resp.text();
-      let detail = errBody;
-      try{detail = JSON.parse(errBody).detail || errBody}catch(e){}
-      addMsg('error', `HTTP ${resp.status}: ${detail}`);
-      setStatus('错误', 'var(--red)');
+    if (!resp.ok) {
+      const text = await resp.text();
+      let detail = text;
+      try { detail = JSON.parse(text).detail || text; } catch (e) {}
+      addMessage('error', `HTTP ${resp.status}: ${detail}`);
+      setStatus('请求失败', 'var(--red)');
       return;
     }
 
-    setStatus('流式接收中…', 'var(--green)');
+    setStatus('接收中…', 'var(--green)');
 
+    // 逐块读取 SSE 流
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let currentEvent = '';
+    let currentData = '';
 
-    while(true){
-      const {done, value} = await reader.read();
-      if(done) break;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-      buffer += decoder.decode(value, {stream: true});
+      buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      let currentEvent = '';
-      let currentData = '';
-      let currentId = '';
-
-      for(const line of lines){
-        if(line.startsWith('event: ')){
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
           currentEvent = line.slice(7).trim();
-        } else if(line.startsWith('data: ')){
+        } else if (line.startsWith('data: ')) {
           currentData = line.slice(6).trim();
-          // 尝试空行结束符时处理
-        } else if(line.startsWith('id: ')){
-          currentId = line.slice(4).trim();
-        } else if(line === '' && currentEvent){
-          // SSE 帧结束 — 处理
-          handleSSEEvent(currentEvent, currentData, currentId, assistantBubble);
-          currentEvent = ''; currentData = ''; currentId = '';
+        } else if (line === '' && currentEvent) {
+          // SSE 帧结束 → 处理
+          handleEvent(currentEvent, currentData, contentSpan);
+          currentEvent = '';
+          currentData = '';
         }
       }
-      // 如果 buffer 本身就是完整行（无尾部换行），检查是否完整帧
     }
 
     setStatus('完成', 'var(--green)');
-  } catch(err){
-    if(err.name === 'AbortError'){
+  } catch (err) {
+    if (err.name === 'AbortError') {
       setStatus('已取消', 'var(--amber)');
-      addMsg('system', '已取消');
+      addMessage('system', '已取消');
     } else {
-      console.error(err);
-      addMsg('error', String(err.message || err));
-      setStatus('错误', 'var(--red)');
+      console.error('SSE error:', err);
+      addMessage('error', err?.message || '连接中断');
+      setStatus('连接中断', 'var(--red)');
     }
   } finally {
-    cursorSpan?.remove();
+    // 移除光标
+    const cursor = contentSpan.parentElement?.querySelector('.stream-cursor');
+    cursor?.remove();
+    // 恢复 UI
     inputEl.disabled = false;
     sendBtn.disabled = false;
     abortController = null;
@@ -570,82 +566,73 @@ async function sendMessage(userText){
   }
 }
 
-function handleSSEEvent(event, data, id, contentSpanEl){
-  const logCls = event === 'end' ? 'end' : event === 'error' ? 'error' : event === '__heartbeat__' ? 'heartbeat' : '';
-  addLog(`${event} ${data.slice(0,120)}`, logCls);
+// =============================================================
+// SSE 事件处理
+// =============================================================
+function handleEvent(event, data, contentSpan) {
+  switch (event) {
+    case '__heartbeat__':
+    case '__heartbeat':
+      // 心跳，忽略
+      break;
 
-  if(event === '__heartbeat__' || event === '__heartbeat') return;
+    case 'metadata':
+      try {
+        const meta = JSON.parse(data);
+        addMessage('system', `运行: ${(meta.run_id || '').slice(0, 8)}…`);
+      } catch (e) {}
+      break;
 
-  if(event === 'metadata'){
-    try{
-      const meta = JSON.parse(data);
-      currentRunId = meta.run_id;
-      addMsg('system', `run: ${meta.run_id?.slice(0,8)}…`, {badge: 'metadata'});
-    } catch(e){}
-    return;
-  }
-
-  if(event === 'end') return;
-
-  if(event === 'error'){
-    try{
-      const errData = JSON.parse(data);
-      addMsg('error', errData.message || data);
-    } catch(e){
-      addMsg('error', data);
-    }
-    return;
-  }
-
-  // updates / messages / values
-  try{
-    const parsed = JSON.parse(data);
-    // 提取 assistant 消息内容
-    const msgs = parsed?.messages || parsed?.agent || parsed?.model || parsed;
-    let text = '';
-    if(Array.isArray(msgs)){
-      const last = msgs[msgs.length-1];
-      if(last && typeof last === 'object'){
-        text = last.content || last.tool_calls?.[0]?.name || JSON.stringify(last);
-      } else {
-        text = String(last);
+    case 'updates':
+      try {
+        const parsed = JSON.parse(data);
+        // 后端现在只发纯文本字符串
+        if (typeof parsed === 'string' && parsed) {
+          contentSpan.textContent = parsed;
+        }
+      } catch (e) {
+        // 非 JSON，忽略
       }
-    } else if(typeof msgs === 'string'){
-      text = msgs;
-    } else if(msgs?.content){
-      text = msgs.content;
-    } else if(msgs?.tool_calls){
-      text = `[工具调用: ${msgs.tool_calls.map(t=>t.name).join(', ')}]`;
-    } else {
-      text = JSON.stringify(msgs).slice(0,200);
-    }
+      break;
 
-    if(typeof text === 'string'){
-      contentSpanEl.textContent = text;
-    }
-  } catch(e){
-    contentSpanEl.textContent = data;
+    case 'error':
+      try {
+        const errData = JSON.parse(data);
+        addMessage('error', errData?.message || data);
+      } catch (e) {
+        addMessage('error', data);
+      }
+      break;
+
+    case 'end':
+      // 流结束，无需操作
+      break;
+
+    default:
+      // 未知事件，忽略
+      break;
   }
 }
 
-// ── 发送 ──
-function doSend(){
-  const text = inputEl.value;
-  if(!text.trim() || sendBtn.disabled) return;
-  inputEl.value = '';
-  inputEl.style.height = 'auto';
-  sendMessage(text);
-}
-
-// ── 事件绑定 ──
-inputEl.addEventListener('keydown', e => {
-  if(e.key === 'Enter' && !e.shiftKey){
+// =============================================================
+// 事件绑定
+// =============================================================
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    doSend();
+    sendMessage(inputEl.value);
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
   }
 });
 
-sendBtn.addEventListener('click', doSend);
+sendBtn.addEventListener('click', () => {
+  const text = inputEl.value;
+  if (!text.trim()) return;
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  sendMessage(text);
+});
 
 // 自动调整 textarea 高度
 inputEl.addEventListener('input', () => {
@@ -653,31 +640,24 @@ inputEl.addEventListener('input', () => {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
 });
 
-clearBtn.addEventListener('click', () => {
+document.getElementById('clear-btn').addEventListener('click', () => {
   msgEl.innerHTML = '';
-  logEl.innerHTML = '';
-  currentRunId = null;
   threadIdEl.value = '';
   setStatus('就绪', 'var(--text-secondary)');
 });
 
-logToggle.addEventListener('click', () => {
-  logEl.classList.toggle('open');
-  logToggle.textContent = logEl.classList.contains('open') ? '📋 隐藏日志' : '📋 日志';
-});
-
 // Ctrl+Enter 清空
-document.addEventListener('keydown', e => {
-  if(e.ctrlKey && e.key === 'Enter' && !e.shiftKey){
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    clearBtn.click();
+    msgEl.innerHTML = '';
+    threadIdEl.value = '';
+    setStatus('就绪', 'var(--text-secondary)');
   }
 });
 
-// ── 初始焦点 ──
 inputEl.focus();
 console.log('my-df 对话界面已加载');
-})();
 </script>
 </body>
 </html>
