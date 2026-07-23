@@ -59,6 +59,8 @@ async def start_run(
 
     # 构造 agent 配置并启动后台运行
     agent_config: dict[str, Any] = {"recursion_limit": 100}
+    agent_config.setdefault("configurable", {})
+    agent_config["configurable"]["user_id"] = "default"
     if body.assistant_id:
         agent_config.setdefault("configurable", {})["assistant_id"] = body.assistant_id
     agent_factory = make_lead_agent(agent_config)  # type: ignore

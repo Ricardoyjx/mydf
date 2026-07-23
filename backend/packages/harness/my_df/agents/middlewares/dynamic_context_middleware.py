@@ -6,10 +6,10 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, Runtime
 
 if TYPE_CHECKING:
-    from langchain.agents.middleware.types import AgentState, Runtime
+    from langchain.agents.middleware.types import AgentState
 
 logger = logging.getLogger(__name__)
 

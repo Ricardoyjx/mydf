@@ -11,6 +11,7 @@ from my_df.agents.thread_state import ThreadState
 from my_df.models.factory import create_chat_model
 from my_df.agents.config.app_config import AppConfig, get_app_config
 from my_df.agents.middlewares.todo_middleware import TodoMiddleware
+from my_df.agents.middlewares.memory_middleware import MemoryMiddleware
 from my_df.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
 from my_df.agents.middlewares.runtime_middlewares import (
     build_lead_runtime_middlewares,
@@ -38,15 +39,16 @@ def _build_middlewares(
 ):
     """根据运行时配置构建中间件链。
 
-    中间件注册顺序（高优先级在前）：
+    中间件注册顺序（按执行先后）：
     1. 运行时基础中间件（预留扩展）
-    2. DynamicContextMiddleware：每次模型调用前注入当前日期时间
-    3. TodoMiddleware：仅 ``is_plan_mode=True`` 时注册（通过环境变量 MYDF_IS_PLAN_MODE 控制）
+    2. MemoryMiddleware：加载持久化记忆，注入到首条 HumanMessage（调用后回写）
+    3. DynamicContextMiddleware：每次模型调用前注入当前日期时间
+    4. TodoMiddleware：仅 ``is_plan_mode=True`` 时注册
 
     参数：
-        config:            运行配置，包含 is_plan_mode 等可配置选项。
-        model_name:        当前模型名称（用于中间件中的模型感知逻辑）。
-        agent_name:        代理名称（用于中间件实例标识）。
+        config:            运行配置，包含 user_id 等。
+        model_name:        当前模型名称。
+        agent_name:        代理名称。
         custom_middlewares: 可选的自定义中间件列表，注入到链中。
         app_config:        应用配置（用于读取 is_plan_mode 等）。
 
@@ -55,34 +57,32 @@ def _build_middlewares(
     """
     middlewares = build_lead_runtime_middlewares(lazy_init=True)
 
+    # 从 config 中提取 user_id，供 MemoryMiddleware 按用户隔离记忆
+    cfg = _get_runtime_config(config)
+    user_id = cfg.get("user_id", "default")
+
+    # MemoryMiddleware：加载持久化记忆，注入到首条 HumanMessage
+    middlewares.append(MemoryMiddleware(agent_name=agent_name, user_id=user_id))
+
     # DynamicContextMiddleware：每次模型调用前注入当前日期时间
     middlewares.append(
         DynamicContextMiddleware(agent_name=agent_name, app_config=app_config)
     )
 
-    # 若启用计划模式，添加 TodoMiddleware
-    # 优先级：config 中的 is_plan_mode > app_config 中的 is_plan_mode > False
-    cfg = _get_runtime_config(config)
+    # TodoMiddleware：仅 is_plan_mode=True 时注册
     is_plan_mode = cfg.get(
         "is_plan_mode",
         app_config.is_plan_mode if app_config is not None else False,
     )
     todo_list_middleware = _create_todo_list_middleware(is_plan_mode)
     if todo_list_middleware is not None:
-        middlewares.append(todo_list_middleware)
+        middlewares.append(todo_list_middleware)  # type: ignore
 
     return middlewares
 
 
 def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
-    """工厂函数：根据 is_plan_mode 创建 TodoMiddleware 实例。
-
-    参数：
-        is_plan_mode: 是否启用计划模式。
-
-    返回：
-        TodoMiddleware 实例（启用时）或 None（禁用时）。
-    """
+    """工厂函数：根据 is_plan_mode 创建 TodoMiddleware 实例。"""
     if not is_plan_mode:
         return None
 
@@ -156,24 +156,16 @@ def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
 
 
 def make_lead_agent(config: RunnableConfig):
-    """Lead Agent 工厂入口函数。
-
-    从 config 或全局配置中获取 app_config 并传递给核心工厂。
-    与 LangGraph Server 兼容的签名。
-    """
+    """Lead Agent 工厂入口函数。"""
     runtime_config = _get_runtime_config(config)
     runtime_app_config = runtime_config.get("app_config")
     return _make_lead_agent(config, app_config=runtime_app_config or get_app_config())
 
 
 def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
-    """Lead Agent 核心工厂。
-
-    解析运行时配置 → 从 ``app_config`` 获取模型配置 → 组装工具链 → 创建 Agent。
-    """
+    """Lead Agent 核心工厂。"""
     agent_name = "lead_agent"
 
-    # 从 app_config 中获取第一个可用模型配置
     if not app_config.models:
         logger.warning(
             "未配置模型（app_config.models 为空），"
@@ -185,7 +177,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     return create_agent(
         model=create_chat_model(
-            name=None,  # 使用 app_config 中第一个模型
+            name=None,
             thinking_enable=False,
             app_config=app_config,
             attach_tracing=False,
