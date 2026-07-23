@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from my_df.agents.config.app_config import AppConfig
+from my_df.config.app_config import AppConfig
 from my_df.runtime.stream_bridge.base import StreamBridge
 
 logger = logging.getLogger(__name__)

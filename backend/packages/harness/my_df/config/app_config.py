@@ -6,11 +6,11 @@
 import os
 import logging
 
-from my_df.agents.config.checkpointer_config import CheckpointerConfig
-from my_df.agents.config.stream_bridge_config import StreamBridgeConfig
+from my_df.config.checkpointer_config import CheckpointerConfig
+from my_df.config.stream_bridge_config import StreamBridgeConfig
 from pydantic import BaseModel, Field
 
-from my_df.agents.config.model_config import ModelConfig
+from my_df.config.model_config import ModelConfig
 
 logger = logging.getLogger(__name__)
 

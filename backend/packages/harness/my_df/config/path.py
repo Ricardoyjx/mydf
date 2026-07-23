@@ -3,7 +3,7 @@ import re
 import shutil
 from pathlib import Path, PureWindowsPath
 
-from my_df.agents.config.runtime_path import runtime_home
+from my_df.config.runtime_path import runtime_home
 
 
 # Virtual path prefix seen by agents inside the sandbox

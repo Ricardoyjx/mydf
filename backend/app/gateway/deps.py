@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 import logging
-from my_df.agents.config.app_config import AppConfig, get_app_config
+from my_df.config.app_config import AppConfig, get_app_config
 from my_df.runtime.checkpointer.async_provider import make_checkpointer
 from my_df.runtime.runs.manager import RunManager
 from fastapi import FastAPI, HTTPException, Request

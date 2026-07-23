@@ -17,8 +17,8 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 
-from my_df.agents.config.app_config import AppConfig
-from my_df.agents.config.stream_bridge_config import get_stream_bridge_config
+from my_df.config.app_config import AppConfig
+from my_df.config.stream_bridge_config import get_stream_bridge_config
 from my_df.runtime.stream_bridge.memory import InMemoryStreamBridge
 
 
