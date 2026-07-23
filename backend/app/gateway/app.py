@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """应用程序生命周期处理器。"""
 
+    # 0. 配置日志级别 + 彩色输出
+    log_level = (os.getenv("MYDF_LOG_LEVEL") or "info").upper()
+    logger.setLevel(getattr(logging, log_level, logging.INFO))
+    if not logging.getLogger().hasHandlers():
+        handler = logging.StreamHandler()
+        handler.setFormatter(_ColoredFormatter())
+        logging.getLogger().addHandler(handler)
+        logging.getLogger().setLevel(logging.INFO)
+
     # 1. 加载 .env 文件，使 DEEPSEEK_API_KEY 等环境变量可用
     env_path = _BACKEND_DIR / ".env"
     if env_path.exists():
@@ -113,6 +122,26 @@ def create_app() -> FastAPI:
         return response
 
     return app
+
+
+class _ColoredFormatter(logging.Formatter):
+    """带 ANSI 颜色的日志格式化器。"""
+    _LEVEL_COLORS = {
+        "DEBUG": "\033[36m",     # 青色
+        "INFO": "\033[32m",      # 绿色
+        "WARNING": "\033[33m",   # 黄色
+        "ERROR": "\033[31m",     # 红色
+        "CRITICAL": "\033[41m",  # 红底
+    }
+    _RESET = "\033[0m"
+    _BOLD = "\033[1m"
+    _DIM = "\033[2m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        level_color = self._LEVEL_COLORS.get(record.levelname, "")
+        level = f"{level_color}{record.levelname}{self._RESET}"
+        name = f"{self._DIM}{record.name}{self._RESET}"
+        return f"{level} {name} | {record.getMessage()}"
 
 
 app = create_app()
