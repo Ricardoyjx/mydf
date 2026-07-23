@@ -17,36 +17,39 @@ For sync usage see :mod:`deerflow.runtime.checkpointer.provider`.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
 
 from langgraph.types import Checkpointer
-from my_df.agents.config.app_config import AppConfig, get_app_config
+from my_df.config.app_config import AppConfig, get_app_config
 
-# from my_df.runtime.checkpointer.provider import (
-#     POSTGRES_CONN_REQUIRED,
-#     POSTGRES_INSTALL,
-#     SQLITE_INSTALL,
-# )
-# from my_df.runtime.store._sqlite_utils import (
-#     ensure_sqlite_parent_dir,
-#     resolve_sqlite_conn_str,
-# )
+from my_df.runtime.checkpointer.provider import (
+    POSTGRES_CONN_REQUIRED,
+    POSTGRES_INSTALL,
+    SQLITE_INSTALL,
+)
+from my_df.runtime.store._sqlite_utils import (
+    ensure_sqlite_parent_dir,
+    resolve_sqlite_conn_str,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# def _prepare_sqlite_checkpointer_path(raw: str) -> str:
-#     conn_str = resolve_sqlite_conn_str(raw)
-#     ensure_sqlite_parent_dir(conn_str)
-#     return conn_str
+def _prepare_sqlite_checkpointer_path(raw: str) -> str:
+    """准备 SQLite checkpointer 连接路径：解析连接字符串并确保父目录存在。"""
+    conn_str = resolve_sqlite_conn_str(raw)
+    ensure_sqlite_parent_dir(conn_str)
+    return conn_str
 
 
-# def _prepare_database_sqlite_checkpointer_path(db_config) -> str:
-#     conn_str = db_config.checkpointer_sqlite_path
-#     ensure_sqlite_parent_dir(conn_str)
-#     return conn_str
+def _prepare_database_sqlite_checkpointer_path(db_config) -> str:
+    """从 database 配置段提取 SQLite 路径并确保父目录存在。"""
+    conn_str = db_config.checkpointer_sqlite_path
+    ensure_sqlite_parent_dir(conn_str)
+    return conn_str
 
 
 # ---------------------------------------------------------------------------
@@ -63,35 +66,37 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
         yield InMemorySaver()
         return
 
-    # if config.type == "sqlite":
-    #     try:
-    #         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    #     except ImportError as exc:
-    #         raise ImportError(SQLITE_INSTALL) from exc
+    if config.type == "sqlite":
+        # SQLite 持久化：依赖 AsyncSqliteSaver，连接字符串在后台线程解析（避免阻塞事件循环）
+        try:
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        except ImportError as exc:
+            raise ImportError(SQLITE_INSTALL) from exc
 
-    #     conn_str = await asyncio.to_thread(
-    #         _prepare_sqlite_checkpointer_path, config.connection_string or "store.db"
-    #     )
-    #     async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
-    #         await saver.setup()
-    #         yield saver
-    #     return
+        conn_str = await asyncio.to_thread(
+            _prepare_sqlite_checkpointer_path, config.connection_string or "store.db"
+        )
+        async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
+            await saver.setup()
+            yield saver
+        return
 
-    # if config.type == "postgres":
-    #     try:
-    #         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    #     except ImportError as exc:
-    #         raise ImportError(POSTGRES_INSTALL) from exc
+    if config.type == "postgres":
+        # PostgreSQL 持久化：依赖 AsyncPostgresSaver，适用于多 worker 生产环境
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        except ImportError as exc:
+            raise ImportError(POSTGRES_INSTALL) from exc
 
-    #     if not config.connection_string:
-    #         raise ValueError(POSTGRES_CONN_REQUIRED)
+        if not config.connection_string:
+            raise ValueError(POSTGRES_CONN_REQUIRED)
 
-    #     async with AsyncPostgresSaver.from_conn_string(
-    #         config.connection_string
-    #     ) as saver:
-    #         await saver.setup()
-    #         yield saver
-    #     return
+        async with AsyncPostgresSaver.from_conn_string(
+            config.connection_string
+        ) as saver:
+            await saver.setup()
+            yield saver
+        return
 
     raise ValueError(f"Unknown checkpointer type: {config.type!r}")
 
