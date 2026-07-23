@@ -192,7 +192,7 @@ def _extract_facts(
     ]
 
     for pattern, category, confidence in patterns:
-        for match in re_mod.finditer(pattern, cleaned):
+        for match in re.finditer(pattern, cleaned):
             content = match.group(0).strip()
             if not content or content in seen:
                 continue
