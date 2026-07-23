@@ -14,10 +14,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import AgentMiddleware, Runtime
 from my_df.agents.memory.storage import get_memory_storage, utc_now_iso_z
+from datetime import datetime
 
 if TYPE_CHECKING:
     from langchain.agents.middleware.types import AgentState
@@ -139,6 +141,80 @@ def _extract_conversation_summary(messages: list[Any], max_turns: int = 20) -> s
     return "\n".join(turns)
 
 
+def _extract_facts(
+    messages: list[Any], max_facts: int = 10, thread_id: str = ""
+) -> list[dict[str, Any]]:
+    """从用户最新消息中提取结构化事实。
+
+    匹配用户自我披露的信息（我叫、我喜欢、我是、我有 等关键词），
+    忽略 AI 回复中的解释性内容。无匹配时返回空列表。
+    """
+    if not messages:
+        return []
+
+    # 取最后一条用户消息
+    user_msg = None
+    for msg in reversed(messages):
+        if getattr(msg, "type", "") == "human":
+            user_msg = msg
+            break
+    if not user_msg:
+        return []
+
+    raw = str(getattr(user_msg, "content", ""))
+    cleaned = re.sub(
+        r"<system-reminder>.*?</system-reminder>|<memory_context>.*?</memory_context>",
+        "",
+        raw,
+        flags=re.DOTALL,
+    ).strip()
+    if not cleaned:
+        return []
+
+    now = utc_now_iso_z()
+    facts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    # 从用户消息中提取事实的模式
+    patterns = [
+        (r"我(?:叫|是)\s*(.+?)(?:[。，；!！?？]|$)", "identity", 0.8),
+        (
+            r"我(?:的\s*)?(?:名字|姓名|名称)\s*(?:是|叫)\s*(.+?)(?:[。，；!！?？]|$)",
+            "identity",
+            0.9,
+        ),
+        (r"我(?:喜欢|热爱|钟情|偏爱)\s*(.+?)(?:[。，；!！?？]|$)", "preference", 0.8),
+        (r"我(?:想|要|希望|想要|打算)\s*(.+?)(?:[。，；!！?？]|$)", "preference", 0.6),
+        (r"我(?:是|做|从事)\s*(.+?)(?:[。，；!！?？]|$)", "attribute", 0.6),
+        (r"我有\s*(.+?)(?:[。，；!！?？]|$)", "attribute", 0.5),
+        (r"我住在\s*(.+?)(?:[。，；!！?？]|$)", "attribute", 0.8),
+        (r"我(?:的\s*)?(.+?)\s*是\s*(.+?)(?:[。，；!！?？]|$)", "attribute", 0.7),
+    ]
+
+    for pattern, category, confidence in patterns:
+        for match in re_mod.finditer(pattern, cleaned):
+            content = match.group(0).strip()
+            if not content or content in seen:
+                continue
+            seen.add(content)
+
+            fact_id = f"fact_{int(datetime.now().timestamp())}_{len(facts)}"
+            facts.append(
+                {
+                    "id": fact_id,
+                    "content": content,
+                    "category": category,
+                    "confidence": confidence,
+                    "createdAt": now,
+                    "source": thread_id,
+                }
+            )
+            if len(facts) >= max_facts:
+                return facts
+
+    return facts
+
+
 class MemoryMiddleware(AgentMiddleware):
     """在模型调用前后同步记忆上下文。
 
@@ -233,12 +309,26 @@ class MemoryMiddleware(AgentMiddleware):
                 "summary": summary,
                 "updatedAt": utc_now_iso_z(),
             }
+
+            # 提取新事实并合并到 facts 列表
+            max_facts = getattr(get_memory_storage(), "max_facts", 100)
+            new_facts = _extract_facts(messages, max_facts)
+            existing_facts = memory.get("facts", [])
+            existing_ids = {f["id"] for f in existing_facts}
+            for f in new_facts:
+                if f["id"] not in existing_ids:
+                    existing_facts.append(f)
+            # 限制事实总数
+            memory["facts"] = existing_facts[:max_facts]
+
             memory["lastUpdated"] = utc_now_iso_z()
 
             self._storage.save(
                 memory, agent_name=self._agent_name, user_id=self._user_id
             )
-            logger.debug("memory 已回写 (user=%s)", self._user_id)
+            logger.debug(
+                "memory 已回写 (user=%s), facts=%d", self._user_id, len(new_facts)
+            )
         except Exception as e:
             logger.warning("回写 memory 失败: %s", e)
 
