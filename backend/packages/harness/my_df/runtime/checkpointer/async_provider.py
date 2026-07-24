@@ -23,8 +23,8 @@ import logging
 from collections.abc import AsyncIterator
 
 from langgraph.types import Checkpointer
-from my_df.config.app_config import AppConfig, get_app_config
 
+from my_df.config.app_config import AppConfig, get_app_config
 from my_df.runtime.checkpointer.provider import (
     POSTGRES_CONN_REQUIRED,
     POSTGRES_INSTALL,
@@ -115,35 +115,35 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
         yield InMemorySaver()
         return
 
-    # if db_config.backend == "sqlite":
-    #     try:
-    #         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    #     except ImportError as exc:
-    #         raise ImportError(SQLITE_INSTALL) from exc
+    if db_config.backend == "sqlite":
+        try:
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        except ImportError as exc:
+            raise ImportError(SQLITE_INSTALL) from exc
 
-    #     conn_str = await asyncio.to_thread(
-    #         _prepare_database_sqlite_checkpointer_path, db_config
-    #     )
-    #     async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
-    #         await saver.setup()
-    #         yield saver
-    #     return
+        conn_str = await asyncio.to_thread(
+            _prepare_database_sqlite_checkpointer_path, db_config
+        )
+        async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
+            await saver.setup()
+            yield saver
+        return
 
-    # if db_config.backend == "postgres":
-    #     try:
-    #         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    #     except ImportError as exc:
-    #         raise ImportError(POSTGRES_INSTALL) from exc
+    if db_config.backend == "postgres":
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        except ImportError as exc:
+            raise ImportError(POSTGRES_INSTALL) from exc
 
-    #     if not db_config.postgres_url:
-    #         raise ValueError(
-    #             "database.postgres_url is required for the postgres backend"
-    #         )
+        if not db_config.postgres_url:
+            raise ValueError(
+                "database.postgres_url is required for the postgres backend"
+            )
 
-    #     async with AsyncPostgresSaver.from_conn_string(db_config.postgres_url) as saver:
-    #         await saver.setup()
-    #         yield saver
-    #     return
+        async with AsyncPostgresSaver.from_conn_string(db_config.postgres_url) as saver:
+            await saver.setup()
+            yield saver
+        return
 
     raise ValueError(f"Unknown database backend: {db_config.backend!r}")
 

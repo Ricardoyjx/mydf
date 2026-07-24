@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from my_df.agents.config.memory_config import get_memory_config
-from my_df.agents.config.path import get_paths
+from my_df.config.memory_config import get_memory_config
+from my_df.config.path import get_paths
 
 logger = logging.getLogger(__name__)
 AGENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")

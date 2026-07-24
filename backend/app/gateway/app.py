@@ -1,22 +1,22 @@
 """FastAPI 网关入口：应用生命周期管理 + 路由注册。"""
 
+import logging
 import os
 import time
-from pathlib import Path
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-import logging
-from typing import AsyncGenerator
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
-from dotenv import load_dotenv
+from pathlib import Path
 
-from my_df.agents.config.app_config import get_app_config
-from app.gateway.routers.runs import router as runs_router
-from app.gateway.routers.memory import router as memory_router
-from app.gateway.routers.threads import router as threads_router
 from app.gateway.config import get_gateway_config
 from app.gateway.deps import langgraph_runtime
+from app.gateway.routers.memory import router as memory_router
+from app.gateway.routers.runs import router as runs_router
+from app.gateway.routers.threads import router as threads_router
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from my_df.config.app_config import get_app_config
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 logger = logging.getLogger(__name__)
@@ -106,7 +106,9 @@ def create_app() -> FastAPI:
             elapsed = time.perf_counter() - start
             logger.error(
                 "请求异常 | %s %s | %.0fms",
-                method, full_path, elapsed * 1000,
+                method,
+                full_path,
+                elapsed * 1000,
                 exc_info=True,
             )
             raise
@@ -117,7 +119,10 @@ def create_app() -> FastAPI:
         log_fn = logger.debug if "text/event-stream" in content_type else logger.info
         log_fn(
             "%s %s | %s | %.0fms",
-            method, full_path, response.status_code, elapsed * 1000,
+            method,
+            full_path,
+            response.status_code,
+            elapsed * 1000,
         )
         return response
 
@@ -126,11 +131,12 @@ def create_app() -> FastAPI:
 
 class _ColoredFormatter(logging.Formatter):
     """带 ANSI 颜色的日志格式化器。"""
+
     _LEVEL_COLORS = {
-        "DEBUG": "\033[36m",     # 青色
-        "INFO": "\033[32m",      # 绿色
-        "WARNING": "\033[33m",   # 黄色
-        "ERROR": "\033[31m",     # 红色
+        "DEBUG": "\033[36m",  # 青色
+        "INFO": "\033[32m",  # 绿色
+        "WARNING": "\033[33m",  # 黄色
+        "ERROR": "\033[31m",  # 红色
         "CRITICAL": "\033[41m",  # 红底
     }
     _RESET = "\033[0m"
