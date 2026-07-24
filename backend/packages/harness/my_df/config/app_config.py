@@ -3,14 +3,15 @@
 通过环境变量加载运行时配置，所有敏感信息（API Key）来自 .env 文件。
 """
 
-import os
 import logging
+import os
+from typing import cast
 
-from my_df.config.checkpointer_config import CheckpointerConfig
-from my_df.config.stream_bridge_config import StreamBridgeConfig
 from pydantic import BaseModel, Field
 
+from my_df.config.checkpointer_config import CheckpointerConfig, CheckpointerType
 from my_df.config.model_config import ModelConfig
+from my_df.config.stream_bridge_config import StreamBridgeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ ENV_DEBUG = "MYDF_DEBUG"
 ENV_PLAN_MODE = "MYDF_IS_PLAN_MODE"
 ENV_LLM_MODEL = "MYDF_LLM_MODEL"
 ENV_LLM_API_KEY = "MYDF_LLM_API_KEY"
+ENV_CHECKPOINTER_TYPE = "MYDF_CHECKPOINTER_TYPE"
+ENV_CHECKPOINTER_PATH = "MYDF_CHECKPOINTER_PATH"
 
 
 class AppConfig(BaseModel):
@@ -68,6 +71,18 @@ def _build_default_model_config() -> ModelConfig | None:
     )
 
 
+def _build_checkpointer_config() -> CheckpointerConfig | None:
+    """从环境变量构建 checkpointer 配置。"""
+    raw = os.getenv(ENV_CHECKPOINTER_TYPE)
+    if raw not in ("memory", "sqlite", "postgres"):
+        return None  # 未配置或值无效，使用 InMemorySaver
+    return CheckpointerConfig(
+        type=cast("CheckpointerType", raw),
+        connection_string=os.getenv(ENV_CHECKPOINTER_PATH)
+        or ".deer-flow/checkpoints.db",
+    )
+
+
 _app_config: AppConfig | None = None
 
 
@@ -90,16 +105,20 @@ def get_app_config() -> AppConfig:
     if default_model is not None:
         models.append(default_model)
 
+    checkpointer = _build_checkpointer_config()
+
     _app_config = AppConfig(
         log_level=log_level if not is_debug else "debug",
         models=models,
+        checkpointer=checkpointer,
         is_plan_mode=is_plan_mode,
     )
 
     logger.info(
-        "应用配置已加载: models=%d, plan_mode=%s, log_level=%s",
+        "应用配置已加载: models=%d, plan_mode=%s, log_level=%s, checkpointer=%s",
         len(_app_config.models),
         _app_config.is_plan_mode,
         _app_config.log_level,
+        _app_config.checkpointer.type if _app_config.checkpointer else "memory",  # type: ignore[reportOptionalMemberAccess]
     )
     return _app_config

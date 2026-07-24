@@ -54,6 +54,14 @@ async def _async_store(config) -> AsyncIterator[BaseStore]:
         yield InMemoryStore()
         return
 
+    # 非 memory 后端暂未启用 SQLite/Postgres Store，统一回退到 InMemoryStore
+    if config.type in ("sqlite", "postgres"):
+        from langgraph.store.memory import InMemoryStore
+
+        logger.info("Store: %s 后端暂未启用，使用 InMemoryStore 回退", config.type)
+        yield InMemoryStore()
+        return
+
     # if config.type == "sqlite":
     #     try:
     #         from langgraph.store.sqlite.aio import AsyncSqliteStore

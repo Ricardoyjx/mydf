@@ -1,12 +1,12 @@
 """线程管理路由：查询对话历史消息。"""
 
 import logging
+import re
 from typing import Any
 
+from app.gateway.deps import get_checkpointer
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import message_to_dict
-
-from app.gateway.deps import get_checkpointer
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,18 @@ async def get_thread_messages(thread_id: str, request: Request):
     if not messages:
         return {"thread_id": thread_id, "messages": []}
 
+        # 清洗 content：去掉中间件注入的系统标签
+    _SYSTEM_BLOCKS_RE = re.compile(
+        r"<system-reminder>.*?</system-reminder>|"
+        r"<memory_context>.*?</memory_context>",
+        re.DOTALL,
+    )
+
+    def _clean_content(raw: str) -> str:
+        """去掉 <system-reminder> 和 <memory_context> 等注入内容，保留纯对话文本。"""
+        cleaned = _SYSTEM_BLOCKS_RE.sub("", raw).strip()
+        return cleaned
+
     # 序列化 BaseMessage 对象为可 JSON 序列化的 dict
     serialized = []
     for msg in messages:
@@ -55,17 +67,20 @@ async def get_thread_messages(thread_id: str, request: Request):
             serialized.append(
                 {
                     "role": d.get("type", "unknown"),
-                    "content": d.get("data", {}).get(
-                        "content", str(msg.content) if hasattr(msg, "content") else ""
+                    "content": _clean_content(
+                        d.get("data", {}).get(
+                            "content",
+                            str(msg.content) if hasattr(msg, "content") else "",
+                        )
                     ),
                     "id": d.get("id", ""),
                 }
             )
         except Exception as e:
             # 回退：直接读 .content 属性
-            content = str(getattr(msg, "content", ""))
+            raw = str(getattr(msg, "content", ""))
             role = str(getattr(msg, "type", "unknown"))
-            serialized.append({"role": role, "content": content, "id": ""})
+            serialized.append({"role": role, "content": _clean_content(raw), "id": ""})
 
     return {
         "thread_id": thread_id,

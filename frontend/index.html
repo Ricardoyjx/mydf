@@ -394,6 +394,7 @@ body::before{
     </div>
     <div class="toolbar-right">
       <span class="toggle" id="log-toggle">📋 日志</span>
+      <span class="toggle" id="load-history">📜 历史</span>
       <button class="btn-ghost" id="clear-btn">清空</button>
     </div>
   </div>
@@ -414,6 +415,61 @@ const sendBtn = document.getElementById('send-btn');
 const threadIdEl = document.getElementById('thread-id');
 const assistantIdEl = document.getElementById('assistant-id');
 const statusBadge = document.getElementById('status-badge');
+
+// =============================================================
+// localStorage 持久化（thread_id，刷新不丢）
+// =============================================================
+const STORAGE_KEY = 'my-df-thread-id';
+
+function restoreThreadId() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) threadIdEl.value = saved;
+}
+restoreThreadId();
+
+function saveThreadId(id) {
+  localStorage.setItem(STORAGE_KEY, id);
+}
+
+// =============================================================
+// 加载历史消息
+// =============================================================
+async function loadHistory() {
+  const tid = threadIdEl.value.trim();
+  if (!tid) {
+    setStatus('请输入 thread_id', 'var(--amber)');
+    return;
+  }
+  setStatus('加载中…', 'var(--accent)');
+  try {
+    const resp = await fetch('/api/threads/' + encodeURIComponent(tid) + '/messages');
+    if (!resp.ok) {
+      if (resp.status === 404) {
+        setStatus('新对话', 'var(--text-secondary)');
+        return;
+      }
+      setStatus('加载失败', 'var(--red)');
+      return;
+    }
+    const data = await resp.json();
+    // 清空现有消息
+    msgEl.innerHTML = '';
+    // 渲染历史消息
+    for (const msg of (data.messages || [])) {
+      const role = msg.role === 'human' ? 'user' : msg.role === 'ai' ? 'assistant' : msg.role;
+      if (role === 'user' || role === 'assistant') {
+        addMessage(role, msg.content, { id: msg.id });
+      }
+    }
+    setStatus(data.messages.length + ' 条消息', 'var(--green)');
+    if (data.checkpoint_ts) {
+      addMessage('system', '检查点: ' + data.checkpoint_ts.slice(0, 19).replace('T', ' '));
+    }
+  } catch (err) {
+    console.error('loadHistory error:', err);
+    setStatus('连接失败', 'var(--red)');
+  }
+}
 
 let abortController = null;
 
@@ -489,6 +545,7 @@ async function sendMessage(userText) {
 
   const threadId = threadIdEl.value.trim() || genId();
   if (!threadIdEl.value.trim()) threadIdEl.value = threadId;
+  saveThreadId(threadId);
 
   abortController = new AbortController();
 
@@ -640,9 +697,10 @@ inputEl.addEventListener('input', () => {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
 });
 
+document.getElementById('load-history').addEventListener('click', loadHistory);
+
 document.getElementById('clear-btn').addEventListener('click', () => {
   msgEl.innerHTML = '';
-  threadIdEl.value = '';
   setStatus('就绪', 'var(--text-secondary)');
 });
 
