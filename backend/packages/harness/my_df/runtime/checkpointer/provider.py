@@ -22,8 +22,10 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Iterator
-from my_df.config.app_config import get_app_config
+
 from langgraph.types import Checkpointer
+
+from my_df.config.app_config import get_app_config
 from my_df.config.checkpointer_config import CheckpointerConfig
 from my_df.runtime.store._sqlite_utils import (
     ensure_sqlite_parent_dir,
@@ -54,13 +56,6 @@ def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
     根据配置类型（memory/sqlite/postgres）创建对应的 checkpointer 实例。
     用于 CLI 工具和同步图编译场景。
     """
-    """Context manager that creates and tears down a sync checkpointer.
-
-    Returns a configured ``Checkpointer`` instance. Resource cleanup for any
-    underlying connections or pools is handled by higher-level helpers in
-    this module (such as the singleton factory or context manager); this
-    function does not return a separate cleanup callback.
-    """
     if config.type == "memory":
         from langgraph.checkpoint.memory import InMemorySaver
 
@@ -68,7 +63,7 @@ def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
         yield InMemorySaver()
         return
 
-        # SQLite 同步持久化：引入 SqliteSaver，解析路径并自动创建父目录
+    # SQLite 同步持久化：引入 SqliteSaver，解析路径并自动创建父目录
     if config.type == "sqlite":
         try:
             from langgraph.checkpoint.sqlite import SqliteSaver
@@ -83,7 +78,7 @@ def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
             yield saver
         return
 
-        # PostgreSQL 同步持久化：需要提供完整的连接字符串
+    # PostgreSQL 同步持久化：需要提供完整的连接字符串
     if config.type == "postgres":
         try:
             from langgraph.checkpoint.postgres import PostgresSaver
@@ -116,22 +111,13 @@ def get_checkpointer() -> Checkpointer:
     未配置 checkpointer 时返回 InMemorySaver。
     配置了 SQLite/Postgres 时，保持连接直到进程退出。
     """
-    """Return the global sync checkpointer singleton, creating it on first call.
-
-    Returns an ``InMemorySaver`` when no checkpointer is configured in *config.yaml*.
-
-    Raises:
-        ImportError: If the required package for the configured backend is not installed.
-        ValueError: If ``connection_string`` is missing for a backend that requires it.
-    """
-
     global _checkpointer, _checkpointer_ctx
 
     if _checkpointer is not None:
         return _checkpointer
 
-    from my_df.config.checkpointer_config import get_checkpointer_config
     from my_df.config.app_config import _app_config
+    from my_df.config.checkpointer_config import get_checkpointer_config
 
     config = get_checkpointer_config()
 
