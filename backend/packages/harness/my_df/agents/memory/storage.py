@@ -116,7 +116,7 @@ class FileMemoryStorage(MemoryStorage):
             with open(file_path, encoding="utf-8") as f:
                 data = json.load(f)
             return data
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Failed to load memory file: %s", e)
             return create_empty_memory()
 
@@ -237,7 +237,7 @@ def get_memory_storage() -> MemoryStorage:
                 )
 
             _storage_instance = storage_class()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 "Failed to load memory storage %s, falling back to FileMemoryStorage: %s",
                 storage_class_path,

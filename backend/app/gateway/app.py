@@ -6,6 +6,7 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import ClassVar
 
 from app.gateway.config import get_gateway_config
 from app.gateway.deps import langgraph_runtime
@@ -104,12 +105,12 @@ def create_app() -> FastAPI:
             response = await call_next(request)
         except Exception:
             elapsed = time.perf_counter() - start
-            logger.error(
+            logger.exception(
                 "请求异常 | %s %s | %.0fms",
                 method,
                 full_path,
                 elapsed * 1000,
-                exc_info=True,
+                # exc_info=True,
             )
             raise
 
@@ -132,7 +133,7 @@ def create_app() -> FastAPI:
 class _ColoredFormatter(logging.Formatter):
     """带 ANSI 颜色的日志格式化器。"""
 
-    _LEVEL_COLORS = {
+    _LEVEL_COLORS: ClassVar[dict] = {
         "DEBUG": "\033[36m",  # 青色
         "INFO": "\033[32m",  # 绿色
         "WARNING": "\033[33m",  # 黄色
