@@ -132,29 +132,53 @@ class PyMilvusStorage(MilvusStorage):
     # ── 生命周期 ──────────────────────────────────────────────────────
 
     async def connect(self) -> None:
+        """连接到 Milvus 服务。
+
+        首次连接时 Milvus Proxy 可能尚未就绪（启动需 30-60 秒），
+        此处使用指数退避重试，最多等待约 60 秒。
         """
-        连接到 Milvus 服务。"""
 
         if self._connected:
             logger.debug("MilvusStorage 已经连接，无需重复连接。")
             return
 
-        try:
-            connections.connect(
-                alias=self._alias,
-                host=self._config.host,
-                port=self._config.port,
-            )
-            self._connected = True
-            logger.info(
-                "成功连接到 Milvus 服务: host=%s, port = %s alias= %s",
-                self._config.host,
-                self._config.port,
-                self._alias,
-            )
-        except Exception as e:
-            logger.error("无法连接到 Milvus 服务: %s", e)
-            raise
+        import asyncio
+
+        max_retries = 12
+        base_delay = 1.0
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                connections.connect(
+                    alias=self._alias,
+                    host=self._config.host,
+                    port=self._config.port,
+                )
+                self._connected = True
+                logger.info(
+                    "成功连接到 Milvus 服务: host=%s, port=%s, alias=%s (第 %d 次尝试)",
+                    self._config.host,
+                    self._config.port,
+                    self._alias,
+                    attempt,
+                )
+                return
+            except Exception as e:
+                delay = base_delay * (1.5 ** (attempt - 1))
+                logger.warning(
+                    "Milvus 连接失败（第 %d/%d 次）: %s，%.1f 秒后重试...",
+                    attempt,
+                    max_retries,
+                    e,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+                logger.error(
+                    "Milvus 服务连接超时，已重试 %d 次（约 60 秒）",
+                    max_retries,
+                )
+                raise
 
     async def close(self) -> None:
         """

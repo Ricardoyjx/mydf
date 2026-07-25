@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await milvus.ensure_collection("default")
             app.state.milvus = milvus
             logger.info("Milvus 向量存储已就绪。")
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.warning("Milvus 未就绪（向量存储不可用，其他功能正常）")
         app.state.milvus = None
 
