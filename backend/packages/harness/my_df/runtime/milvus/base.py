@@ -43,6 +43,12 @@ class MilvusStorage(abc.ABC):
     实现 Embedding 模型与向量存储的解耦。
     """
 
+    @property
+    @abc.abstractmethod
+    def vector_dim(self) -> int:
+        """返回向量维度。具体值由实现类（如 PyMilvusStorage）根据配置决定。"""
+        ...
+
     @abc.abstractmethod
     async def connect(self) -> None:
         """连接到 Milvus 服务。

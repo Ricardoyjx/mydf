@@ -96,6 +96,12 @@ class PyMilvusStorage(MilvusStorage):
             raise RuntimeError("MilvusClient 未连接，请先调用 connect()")
         return self._client
 
+    # ── 属性 ──────────────────────────────────────────────────────────
+
+    @property
+    def vector_dim(self) -> int:
+        return self._config.vector_dim
+
     # ── 生命周期 ──────────────────────────────────────────────────────
 
     async def connect(self) -> None:

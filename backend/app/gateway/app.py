@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import ClassVar
 
@@ -56,11 +56,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("API 网关启动于 %s:%s", config.host, config.port)
 
     # 3. 初始化 Milvus 向量存储（可选，失败不影响应用启动）
+    _milvus_stack = AsyncExitStack()
     try:
-        async with make_milvus_storage() as milvus:
-            await milvus.ensure_collection("default")
-            app.state.milvus = milvus
-            logger.info("Milvus 向量存储已就绪。")
+        milvus = await _milvus_stack.enter_async_context(make_milvus_storage())
+        await milvus.ensure_collection("default")
+        app.state.milvus = milvus
+        logger.info("Milvus 向量存储已就绪")
     except Exception:  # noqa: BLE001
         logger.warning("Milvus 未就绪（向量存储不可用，其他功能正常）")
         app.state.milvus = None
@@ -71,6 +72,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         yield
 
+    # 清理 Milvus 连接（在 langgraph_runtime 关闭后）
+    await _milvus_stack.aclose()
     logger.info("API 网关关闭中")
 
 

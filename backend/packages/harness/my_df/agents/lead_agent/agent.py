@@ -16,6 +16,7 @@ from my_df.agents.middlewares.todo_middleware import TodoMiddleware
 from my_df.agents.thread_state import ThreadState
 from my_df.config.app_config import AppConfig, get_app_config
 from my_df.models.factory import create_chat_model
+from my_df.runtime.milvus.base import MilvusStorage
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ def _build_middlewares(
     custom_middlewares: list[AgentMiddleware] | None = None,
     *,
     app_config: AppConfig | None = None,
+    milvus: MilvusStorage | None = None,
 ):
     """根据运行时配置构建中间件链。
 
@@ -62,7 +64,9 @@ def _build_middlewares(
     user_id = cfg.get("user_id", "default")
 
     # MemoryMiddleware：加载持久化记忆，注入到首条 HumanMessage
-    middlewares.append(MemoryMiddleware(agent_name=agent_name, user_id=user_id))
+    middlewares.append(
+        MemoryMiddleware(agent_name=agent_name, user_id=user_id, milvus=milvus)
+    )
 
     # DynamicContextMiddleware：每次模型调用前注入当前日期时间
     middlewares.append(
@@ -155,14 +159,21 @@ def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
     )
 
 
-def make_lead_agent(config: RunnableConfig):
+def make_lead_agent(config: RunnableConfig, milvus: MilvusStorage | None = None):
     """Lead Agent 工厂入口函数。"""
     runtime_config = _get_runtime_config(config)
     runtime_app_config = runtime_config.get("app_config")
-    return _make_lead_agent(config, app_config=runtime_app_config or get_app_config())
+    return _make_lead_agent(
+        config, app_config=runtime_app_config or get_app_config(), milvus=milvus
+    )
 
 
-def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
+def _make_lead_agent(
+    config: RunnableConfig,
+    *,
+    app_config: AppConfig,
+    milvus: MilvusStorage | None = None,
+):
     """Lead Agent 核心工厂。"""
     agent_name = "lead_agent"
 
@@ -188,6 +199,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             model_name=app_config.models[0].name if app_config.models else None,
             agent_name=agent_name,
             app_config=app_config,
+            milvus=milvus,
         ),
         system_prompt="",
         state_schema=ThreadState,

@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import AgentMiddleware, Runtime
+
 from my_df.agents.memory.storage import get_memory_storage, utc_now_iso_z
-from datetime import datetime
+from my_df.runtime.milvus.base import MilvusStorage
 
 if TYPE_CHECKING:
     from langchain.agents.middleware.types import AgentState
@@ -198,7 +200,7 @@ def _extract_facts(
                 continue
             seen.add(content)
 
-            fact_id = f"fact_{int(datetime.now().timestamp())}_{len(facts)}"
+            fact_id = f"fact_{int(datetime.now().timestamp())}_{len(facts)}"  # noqa: DTZ005
             facts.append(
                 {
                     "id": fact_id,
@@ -226,14 +228,17 @@ class MemoryMiddleware(AgentMiddleware):
         self,
         agent_name: str | None = None,
         user_id: str = "default",
+        milvus: MilvusStorage | None = None,
     ) -> None:
         self._agent_name = (agent_name or "").replace("_", "-") or None
         self._user_id = user_id
         self._storage = get_memory_storage()
+        self._milvus = milvus  # Milvus 向量存储实例（可选）
         logger.info(
-            "MemoryMiddleware 初始化: agent=%s, user=%s",
+            "MemoryMiddleware 初始化: agent=%s, user=%s, milvus=%s",
             agent_name,
             user_id,
+            "yes" if milvus else "no",
         )
 
     # ── property ──────────────────────────────────────────────────────────
@@ -258,7 +263,7 @@ class MemoryMiddleware(AgentMiddleware):
             memory = self._storage.load(
                 agent_name=self._agent_name, user_id=self._user_id
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("读取 memory 失败: %s", e)
             return None
 
@@ -329,7 +334,8 @@ class MemoryMiddleware(AgentMiddleware):
             logger.debug(
                 "memory 已回写 (user=%s), facts=%d", self._user_id, len(new_facts)
             )
-        except Exception as e:
+
+        except Exception as e:  # noqa: BLE001
             logger.warning("回写 memory 失败: %s", e)
 
         return None
@@ -340,12 +346,58 @@ class MemoryMiddleware(AgentMiddleware):
         runtime: Runtime[Any],
     ) -> None:
         """Agent 开始前 hook（当前无操作）。"""
-        pass
 
     async def aafter_model(
         self,
         state: AgentState,
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
-        """异步 hook：委托给同步实现。"""
-        return self.after_model(state, runtime)
+        """异步 hook：先执行同步回写，再尝试 Milvus 向量存储。"""
+        # 1. 先执行同步回写（JSON 存储）
+        sync_result = self.after_model(state, runtime)
+
+        # 2. Milvus 案例：将对话摘要向量化存储
+        if self._milvus is not None:
+            messages = state.get("messages")
+            if messages:
+                summary = _extract_conversation_summary(messages)
+                if summary.strip():
+                    import hashlib
+
+                    # [TODO] 接入真实的 Embedding 模型
+                    # 当前使用 MD5 hash 生成 384 维占位向量
+                    raw_hash = hashlib.md5(summary.encode()).digest()
+                    dummy_vector = [
+                        (raw_hash[i % 16] / 255.0) * 2 - 1
+                        for i in range(self._milvus.vector_dim)
+                    ]
+
+                    thread_id = ""
+                    try:
+                        thread_id = str(
+                            runtime.config.get("configurable", {}).get("thread_id", "")  # type: ignore[union-attr]
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("无法获取 thread_id %s", e)
+
+                    try:
+                        inserted_id = await self._milvus.insert(
+                            user_id=self._user_id,
+                            agent_name=self._agent_name or "default",
+                            text=summary[:2000],
+                            vector=dummy_vector,
+                            content_type="conversation",
+                            metadata={
+                                "thread_id": thread_id,
+                            },
+                        )
+                        logger.info(
+                            "Milvus 记忆已存储: id=%s, dim=%d, user=%s",
+                            inserted_id,
+                            self._milvus.vector_dim,
+                            self._user_id,
+                        )
+                    except Exception as mv_err:  # noqa: BLE001
+                        logger.warning("Milvus 记忆存储失败: %s", mv_err)
+
+        return sync_result
