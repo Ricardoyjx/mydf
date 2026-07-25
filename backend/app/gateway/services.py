@@ -1,18 +1,19 @@
 """运行管理服务：创建运行、消费 SSE 流、格式化 SSE 帧。"""
 
 import asyncio
-from datetime import datetime
 import json
 import re
-from typing import Any, Mapping
 import uuid
+from collections.abc import Mapping
+from datetime import datetime
+from typing import Any
 
+from fastapi import HTTPException, Request
 from my_df.agents.lead_agent.agent import make_lead_agent
 from my_df.runtime.runs.manager import RunManager, RunRecord
-from fastapi import HTTPException, Request
-from my_df.runtime.stream_bridge.base import StreamBridge, StreamEvent
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
 from my_df.runtime.runs.worker import RunContext, run_agent_mini
+from my_df.runtime.stream_bridge.base import StreamBridge, StreamEvent
 
 
 async def start_run(
@@ -31,7 +32,7 @@ async def start_run(
     """
     # run_mgr = get_run_manager(request)  # 暂未启用持久化管理
 
-    now = datetime.now().isoformat()
+    now = datetime.now().isoformat()  # noqa: DTZ005
     # 根据请求决定断开行为
     disconnect = (
         DisconnectMode.cancel
@@ -54,7 +55,7 @@ async def start_run(
             updated_at=now,
             model_name="deepseek-v4-flash",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(e))
 
     # 构造 agent 配置并启动后台运行
@@ -125,9 +126,11 @@ async def see_consumer(
 
     finally:
         # 若运行仍在进行中且配置为取消，则终止任务
-        if record.status in (RunStatus.pending, RunStatus.running):
-            if record.on_disconnect == DisconnectMode.cancel:
-                await run_mgr.cancel(record.run_id)
+        if (
+            record.status in (RunStatus.pending, RunStatus.running)
+            and record.on_disconnect == DisconnectMode.cancel
+        ):
+            await run_mgr.cancel(record.run_id)
 
 
 _DEFAULT_ASSISTANT_ID = "lead_agent"

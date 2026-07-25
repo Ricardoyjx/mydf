@@ -12,19 +12,14 @@
         app.state.milvus = milvus
 """
 
-from __future__ import annotations
-
 import contextlib
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from my_df.runtime.milvus.base import MilvusStorage
 
 from my_df.config.app_config import AppConfig
 from my_df.config.milvus_config import MilvusConfig, get_milvus_config
-from my_df.runtime.milvus.client import PymilvusStorage
+from my_df.runtime.milvus.base import MilvusStorage
+from my_df.runtime.milvus.client import PyMilvusStorage
 
 logger = logging.getLogger(__name__)
 
@@ -47,19 +42,22 @@ async def make_milvus_storage(
         MilvusStorage 实例（已连接状态）。
     """
     if app_config is not None:
-        config = app_config.milvus if hasattr(app_config, 'milvus') and app_config.milvus else None
-    else:
+        config = (
+            app_config.milvus
+            if hasattr(app_config, "milvus") and app_config.milvus
+            else None
+        )
+    if app_config is None:
         config = get_milvus_config()
-
     if config is None:
         config = MilvusConfig()
 
-    storage = PymilvusStorage(config=config)
+    storage = PyMilvusStorage(config=config)
 
     try:
         await storage.connect()
-        logger.info("MilvusStorage 已就绪: host=%s:%s", config.host, config.port)
+        logger.info("成功连接到 Milvus 服务: %s %s", config.host, config.port)
         yield storage
     finally:
         await storage.close()
-        logger.info("MilvusStorage 已关闭")
+        logger.info("MilvusStorage 已关闭: %s", config.alias)

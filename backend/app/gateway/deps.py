@@ -1,14 +1,15 @@
 """FastAPI 依赖注入工具，从 app.state 中获取共享实例。"""
 
-from collections.abc import Callable
-from contextlib import AsyncExitStack, asynccontextmanager
 import logging
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import TypeVar, cast
+
+from fastapi import FastAPI, HTTPException, Request
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from my_df.config.app_config import AppConfig, get_app_config
 from my_df.runtime.checkpointer.async_provider import make_checkpointer
 from my_df.runtime.runs.manager import RunManager
-from fastapi import FastAPI, HTTPException, Request
-from typing import AsyncGenerator, TypeVar, cast
-from langgraph.checkpoint.base import BaseCheckpointSaver
 from my_df.runtime.runs.store.base import RunStore
 from my_df.runtime.runs.store.memory import MemoryRunStore
 from my_df.runtime.runs.worker import RunContext

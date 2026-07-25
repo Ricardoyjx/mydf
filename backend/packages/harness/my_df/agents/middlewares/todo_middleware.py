@@ -5,6 +5,7 @@ from typing import Any, override
 from langchain.agents.middleware import Runtime, TodoListMiddleware, hook_config
 from langchain.agents.middleware.todo import Todo
 from langchain.messages import AIMessage, HumanMessage
+
 from my_df.agents.thread_state import ThreadState
 
 
@@ -87,9 +88,7 @@ class TodoMiddleware(TodoListMiddleware):
     @override
     def before_agent(self, state, runtime) -> None:
         """Agent 调用前 hook（当前无操作）。"""
-        pass
 
     @override
     def after_agent(self, state, runtime) -> None:
         """Agent 调用后 hook（当前无操作）。"""
-        pass

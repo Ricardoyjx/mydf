@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from my_df.config.app_config import get_app_config
+from my_df.runtime.milvus.async_provider import make_milvus_storage
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 logger = logging.getLogger(__name__)
@@ -54,7 +55,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config = get_gateway_config()
     logger.info("API 网关启动于 %s:%s", config.host, config.port)
 
-    # 3. 初始化 LangGraph 运行时（stream bridge、checkpointer 等）
+    # 3. 初始化 Milvus 向量存储（可选，失败不影响应用启动）
+    try:
+        async with make_milvus_storage() as milvus:
+            await milvus.ensure_collection("default")
+            app.state.milvus = milvus
+            logger.info("Milvus 向量存储已就绪。")
+    except Exception:
+        logger.warning("Milvus 未就绪（向量存储不可用，其他功能正常）")
+        app.state.milvus = None
+
+    # 4. 初始化 LangGraph 运行时（stream bridge、checkpointer 等）
     async with langgraph_runtime(app, startup_config):
         logger.info("LangGraph 运行时初始化完成")
 

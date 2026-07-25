@@ -1,31 +1,9 @@
-"""基于 pymilvus 的 MilvusStorage 实现。
-
-负责：
-- 连接管理（connect / close）
-- Collection 自动创建（含 Schema + Index）
-- 向量插入与批量插入
-- 向量搜索（支持标量过滤）
-- 按条件删除与统计
-
-依赖：
-    pymilvus>=2.4.0
-    my_df.config.milvus_config.MilvusConfig
-
-用法（通过 async_provider.py 工厂创建，不直接实例化）：
-    client = PymilvusStorage(config)
-    await client.connect()
-    await client.ensure_collection("user_001")
-    await client.insert("user_001", "lead-agent", "你好", [0.1, 0.2, ...])
-    results = await client.search("user_001", [0.1, 0.2, ...], top_k=3)
-    await client.close()
-"""
-
-from __future__ import annotations
-
 import json
 import logging
 from typing import Any
 
+from my_df.config.milvus_config import MilvusConfig
+from my_df.runtime.milvus.base import MilvusStorage, SearchResult
 from pymilvus import (
     Collection,
     CollectionSchema,
@@ -35,23 +13,10 @@ from pymilvus import (
     utility,
 )
 
-from my_df.config.milvus_config import MilvusConfig
-from my_df.runtime.milvus.base import MilvusStorage, SearchResult
-
 logger = logging.getLogger(__name__)
 
 
-# def _require_pymilvus() -> None:
-#     """检查 pymilvus 是否已安装，未安装时抛出清晰的错误提示。"""
-#     if _IMPORT_ERROR is not None:
-#         raise ImportError(
-#             "pymilvus 未安装。请执行以下命令安装：\n"
-#             "    uv pip install pymilvus>=2.4.0\n"
-#             "或确保 .venv 中已包含该依赖。"
-#         ) from _IMPORT_ERROR
-
-
-class PymilvusStorage(MilvusStorage):
+class PyMilvusStorage(MilvusStorage):
     """pymilvus 实现的 Milvus 向量存储。
 
     设计要点：
@@ -61,20 +26,16 @@ class PymilvusStorage(MilvusStorage):
     """
 
     def __init__(self, config: MilvusConfig | None = None) -> None:
-        # _require_pymilvus()
-
-        self._config = config or MilvusConfig()
+        self._config = config or MilvusConfig(alias="default")
         self._alias = self._config.alias
         self._connected = False
         logger.info(
-            "PymilvusStorage 初始化: host=%s, port=%s, dim=%d, index=%s",
+            "初始化 MilvusStorage，host=%s, port = %s, dim=%s ,index= %s",
             self._config.host,
             self._config.port,
             self._config.vector_dim,
             self._config.index_type,
         )
-
-    # ── 内部辅助 ──────────────────────────────────────────────────────
 
     def _collection_name(self, user_id: str) -> str:
         """生成用户隔离的集合名称。"""
@@ -95,13 +56,14 @@ class PymilvusStorage(MilvusStorage):
         - metadata (JSON)
         - timestamp (VARCHAR, ISO 格式)
         """
+
         fields = [
             FieldSchema(
                 name="id",
                 dtype=DataType.INT64,
                 is_primary=True,
                 auto_id=True,
-                description="自增主键",
+                description="自增ID",
             ),
             FieldSchema(
                 name="vector",
@@ -145,10 +107,9 @@ class PymilvusStorage(MilvusStorage):
                 description="ISO 格式时间戳",
             ),
         ]
+
         return CollectionSchema(
-            fields=fields,
-            description=f"my-df 用户记忆集合（{self._config.vector_dim}d）",
-            enable_dynamic_field=False,
+            fields=fields, description="my_df 存储向量集合", enable_dynamic_field=False
         )
 
     def _build_index_params(self) -> dict[str, Any]:
@@ -171,13 +132,11 @@ class PymilvusStorage(MilvusStorage):
     # ── 生命周期 ──────────────────────────────────────────────────────
 
     async def connect(self) -> None:
-        """连接到 Milvus 服务。
-
-        使用配置中的 host:port 建立 gRPC 连接。
-        连接已存在时跳过（幂等操作）。
         """
+        连接到 Milvus 服务。"""
+
         if self._connected:
-            logger.debug("Milvus 已连接，跳过")
+            logger.debug("MilvusStorage 已经连接，无需重复连接。")
             return
 
         try:
@@ -188,28 +147,29 @@ class PymilvusStorage(MilvusStorage):
             )
             self._connected = True
             logger.info(
-                "Milvus 连接成功: %s:%s (alias=%s)",
+                "成功连接到 Milvus 服务: host=%s, port = %s alias= %s",
                 self._config.host,
                 self._config.port,
                 self._alias,
             )
         except Exception as e:
-            logger.error("Milvus 连接失败: %s", e)
+            logger.error("无法连接到 Milvus 服务: %s", e)
             raise
 
     async def close(self) -> None:
-        """断开 Milvus 连接。
-
-        幂等操作，可多次调用。
         """
+        断开 Milvus 服务连接。"""
+
         if not self._connected:
+            logger.debug("MilvusStorage 未连接，无需断开连接。")
             return
+
         try:
-            connections.disconnect(alias=self._alias)
+            connections.disconnect(self._alias)
             self._connected = False
-            logger.info("Milvus 连接已关闭 (alias=%s)", self._alias)
-        except Exception as e:
-            logger.warning("关闭 Milvus 连接时出错: %s", e)
+            logger.info("已断开 Milvus 服务连接: alias= %s", self._alias)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("无法断开 Milvus 服务连接: %s", e)
 
     # ── 集合管理 ──────────────────────────────────────────────────────
 
@@ -218,11 +178,11 @@ class PymilvusStorage(MilvusStorage):
 
         如果集合已存在则跳过不覆盖，保留已有数据。
         """
+
         name = self._collection_name(user_id)
         try:
             if utility.has_collection(name, using=self._alias):
-                logger.debug("集合已存在: %s", name)
-                # 确保在已有集合的 vector 字段上建立索引（首次连接时可能没有）
+                logger.debug("用户集合已存在: %s", name)
                 coll = Collection(name, using=self._alias)
                 if not coll.has_index():
                     index_params = self._build_index_params()
@@ -230,17 +190,17 @@ class PymilvusStorage(MilvusStorage):
                         field_name="vector",
                         index_params=index_params,
                     )  # type: ignore
-                    logger.info("已为已有集合 %s 创建索引", name)
-                return
+                    logger.info("已创建索引: %s", name)
+                    return
 
-            # 创建集合
+            # 创建合集
             schema = self._build_schema()
             coll = Collection(
                 name=name,
                 schema=schema,
                 using=self._alias,
             )
-            logger.info("集合已创建: %s (dim=%d)", name, self._config.vector_dim)
+            logger.info("已创建用户集合: %s", name)
 
             # 创建索引
             index_params = self._build_index_params()
@@ -248,18 +208,14 @@ class PymilvusStorage(MilvusStorage):
                 field_name="vector",
                 index_params=index_params,
             )  # type: ignore
-            logger.info(
-                "索引已创建: %s, type=%s, metric=IP",
-                name,
-                self._config.index_type,
-            )
+            logger.info("已创建索引: %s", name)
 
             # 加载集合到内存
             coll.load()
-            logger.info("集合已加载到内存: %s", name)
+            logger.info("已加载集合到内存: %s", name)
 
         except Exception as e:
-            logger.error("创建集合 %s 失败: %s", name, e)
+            logger.error("无法创建用户集合:%s %s", name, e)
             raise
 
     async def drop_collection(self, user_id: str) -> None:
@@ -273,7 +229,6 @@ class PymilvusStorage(MilvusStorage):
             raise
 
     # ── 写入操作 ──────────────────────────────────────────────────────
-
     async def insert(
         self,
         user_id: str,
@@ -283,46 +238,9 @@ class PymilvusStorage(MilvusStorage):
         content_type: str = "conversation",
         metadata: dict[str, Any] | None = None,
     ) -> int:
-        """插入一条向量记录。
-
-        返回 Milvus 自动生成的主键 ID（仅第一条，批量插入时通常只有一个）。
-        """
-        from datetime import UTC, datetime
-
-        name = self._collection_name(user_id)
-        coll = Collection(name, using=self._alias)
-
-        timestamp = datetime.now(UTC).isoformat()
-
-        entities = [
-            [vector],  # vector
-            [user_id],  # user_id
-            [agent_name],  # agent_name
-            [text],  # text
-            [content_type],  # content_type
-            [json.dumps(metadata or {})],  # metadata
-            [timestamp],  # timestamp
-        ]
-
-        try:
-            insert_result = coll.insert(entities)
-            coll.flush()
-            ids = insert_result.primary_keys
-            inserted_id = int(ids[0]) if ids else 0
-            logger.debug(
-                "向量插入成功: id=%s, user=%s, type=%s, text_len=%d",
-                inserted_id,
-                user_id,
-                content_type,
-                len(text),
-            )
-            return inserted_id
-        except Exception as e:
-            logger.error("向量插入失败 (user=%s): %s", user_id, e)
-            raise
+        return 1
 
     # ── 搜索操作 ──────────────────────────────────────────────────────
-
     async def search(
         self,
         user_id: str,
@@ -354,23 +272,15 @@ class PymilvusStorage(MilvusStorage):
                 param={"metric_type": "IP", "params": {"nprobe": 10}},
                 limit=top_k,
                 expr=expr,
-                output_fields=[
-                    "text",
-                    "content_type",
-                    "agent_name",
-                    "metadata",
-                    "timestamp",
-                ],
+                output_fields=[],
             )
         except Exception as e:
-            logger.error("向量搜索失败 (user=%s): %s", user_id, e)
+            logger.error("搜索失败: %s", e)
             raise
 
-        # 解析搜索结果
         parsed: list[SearchResult] = []
-        for hits in results:
+        for hits in results:  # type: ignore
             for hit in hits:
-                # hit.entity.get() 返回字段值（字符串或 None）
                 text = hit.entity.get("text") or ""
                 content_type_val = hit.entity.get("content_type") or ""
                 agent_name_val = hit.entity.get("agent_name") or ""
@@ -398,48 +308,19 @@ class PymilvusStorage(MilvusStorage):
                         timestamp=ts,
                     )
                 )
-
         logger.debug("向量搜索完成: user=%s, hits=%d", user_id, len(parsed))
         return parsed
 
-    # ── 管理操作 ──────────────────────────────────────────────────────
+    # ── 管理集合 ──────────────────────────────────────────────────────
+    async def delete_by_filter(
+        self,
+        user_id: str,
+        expr: str,
+    ) -> int:
+        return 1
 
-    async def delete_by_filter(self, user_id: str, expr: str) -> int:
-        """按表达式删除记录。
-
-        示例表达式：
-            ``agent_name == "lead-agent" and content_type == "fact"``
-            ``timestamp < "2026-01-01T00:00:00"``
-        """
-        name = self._collection_name(user_id)
-        coll = Collection(name, using=self._alias)
-        coll.load()
-
-        try:
-            delete_result = coll.delete(expr)
-            coll.flush()
-            deleted_count = (
-                delete_result.delete_count
-                if hasattr(delete_result, "delete_count")
-                else -1
-            )
-            logger.info(
-                "向量删除完成: user=%s, expr=%s, count=%s", user_id, expr, deleted_count
-            )
-            return deleted_count
-        except Exception as e:
-            logger.error("向量删除失败 (user=%s, expr=%s): %s", user_id, expr, e)
-            raise
-
-    async def count(self, user_id: str) -> int:
-        """返回用户集合中的记录总数。"""
-        name = self._collection_name(user_id)
-        try:
-            if not utility.has_collection(name, using=self._alias):
-                return 0
-            coll = Collection(name, using=self._alias)
-            coll.load()
-            return coll.num_entities
-        except Exception as e:
-            logger.warning("查询集合数量失败 (user=%s): %s", user_id, e)
-            return 0
+    async def count(
+        self,
+        user_id: str,
+    ) -> int:
+        return 1

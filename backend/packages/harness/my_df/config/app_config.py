@@ -7,6 +7,7 @@ import logging
 import os
 from typing import cast
 
+from my_df.config.milvus_config import MilvusConfig
 from pydantic import BaseModel, Field
 
 from my_df.config.checkpointer_config import CheckpointerConfig, CheckpointerType
@@ -43,6 +44,10 @@ class AppConfig(BaseModel):
     )
     is_plan_mode: bool = Field(
         default=False, description="是否启用计划模式（TodoMiddleware）"
+    )
+    milvus: MilvusConfig | None = Field(
+        default=None,
+        description="Milvus 配置",
     )
 
 
