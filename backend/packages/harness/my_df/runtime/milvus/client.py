@@ -1,169 +1,131 @@
+"""基于 pymilvus MilvusClient（新版 API）的向量存储实现。
+
+使用 ``pymilvus.MilvusClient`` 替代已废弃的 ORM 风格 API
+（``connections.connect`` / ``Collection``），避免 PyMilvus 3.1 后的兼容问题。
+"""
+
+from __future__ import annotations
+
 import json
 import logging
 from typing import Any
 
-from my_df.config.milvus_config import MilvusConfig
-from my_df.runtime.milvus.base import MilvusStorage, SearchResult
 from pymilvus import (
-    Collection,
     CollectionSchema,
     DataType,
-    FieldSchema,
-    connections,
-    utility,
+    MilvusClient,
+    MilvusException,
 )
+
+from my_df.config.milvus_config import MilvusConfig
+from my_df.runtime.milvus.base import MilvusStorage, SearchResult
 
 logger = logging.getLogger(__name__)
 
 
 class PyMilvusStorage(MilvusStorage):
-    """pymilvus 实现的 Milvus 向量存储。
+    """基于 ``MilvusClient`` 的向量存储。
 
     设计要点：
     - 集合以用户为粒度隔离（``{prefix}_{user_id}``），天然多租户
-    - 索引类型、向量维度通过 MilvusConfig 配置，灵活切换
-    - 所有公共方法均记录操作日志，便于排查
+    - 索引类型、向量维度通过 MilvusConfig 配置
+    - 所有公共方法均记录操作日志
     """
 
     def __init__(self, config: MilvusConfig | None = None) -> None:
-        self._config = config or MilvusConfig(alias="default")
-        self._alias = self._config.alias
-        self._connected = False
+        self._config = config or MilvusConfig()
+        self._client: MilvusClient | None = None
         logger.info(
-            "初始化 MilvusStorage，host=%s, port = %s, dim=%s ,index= %s",
+            "PyMilvusStorage 初始化: host=%s, port=%s, dim=%s, index=%s",
             self._config.host,
             self._config.port,
             self._config.vector_dim,
             self._config.index_type,
         )
 
+    # ── 内部辅助 ──────────────────────────────────────────────────────
+
     def _collection_name(self, user_id: str) -> str:
         """生成用户隔离的集合名称。"""
-        # 替换 user_id 中的非法字符（Milvus 集合名只允许字母、数字、下划线）
         safe = "".join(c if c.isalnum() or c == "_" else "_" for c in user_id)
         return f"{self._config.collection_name_prefix}_{safe}"
 
     def _build_schema(self) -> CollectionSchema:
-        """构建 Collection Schema。
-
-        字段定义：
-        - id (INT64, 主键, 自动生成)
-        - vector (FLOAT_VECTOR, 可配置维度)
-        - user_id (VARCHAR, 多租户过滤用)
-        - agent_name (VARCHAR)
-        - text (VARCHAR, 原始内容)
-        - content_type (VARCHAR, 内容分类)
-        - metadata (JSON)
-        - timestamp (VARCHAR, ISO 格式)
-        """
-
-        fields = [
-            FieldSchema(
-                name="id",
-                dtype=DataType.INT64,
-                is_primary=True,
-                auto_id=True,
-                description="自增ID",
-            ),
-            FieldSchema(
-                name="vector",
-                dtype=DataType.FLOAT_VECTOR,
-                dim=self._config.vector_dim,
-                description=f"文本嵌入向量（{self._config.vector_dim} 维）",
-            ),
-            FieldSchema(
-                name="user_id",
-                dtype=DataType.VARCHAR,
-                max_length=128,
-                description="用户标识（多租户隔离）",
-            ),
-            FieldSchema(
-                name="agent_name",
-                dtype=DataType.VARCHAR,
-                max_length=128,
-                description="代理名称",
-            ),
-            FieldSchema(
-                name="text",
-                dtype=DataType.VARCHAR,
-                max_length=65535,
-                description="原始文本内容",
-            ),
-            FieldSchema(
-                name="content_type",
-                dtype=DataType.VARCHAR,
-                max_length=64,
-                description="内容类型: conversation / fact / memory_summary",
-            ),
-            FieldSchema(
-                name="metadata",
-                dtype=DataType.JSON,
-                description="附加元数据（JSON 对象）",
-            ),
-            FieldSchema(
-                name="timestamp",
-                dtype=DataType.VARCHAR,
-                max_length=32,
-                description="ISO 格式时间戳",
-            ),
-        ]
-
-        return CollectionSchema(
-            fields=fields, description="my_df 存储向量集合", enable_dynamic_field=False
+        """构建 Collection Schema (MilvusClient 兼容)."""
+        schema = MilvusClient.create_schema(auto_id=True, enable_dynamic_field=False)
+        schema.add_field(
+            field_name="id", datatype=DataType.INT64, is_primary=True, auto_id=True
         )
+        schema.add_field(
+            field_name="vector",
+            datatype=DataType.FLOAT_VECTOR,
+            dim=self._config.vector_dim,
+        )
+        schema.add_field(
+            field_name="user_id", datatype=DataType.VARCHAR, max_length=128
+        )
+        schema.add_field(
+            field_name="agent_name", datatype=DataType.VARCHAR, max_length=128
+        )
+        schema.add_field(field_name="text", datatype=DataType.VARCHAR, max_length=65535)
+        schema.add_field(
+            field_name="content_type", datatype=DataType.VARCHAR, max_length=64
+        )
+        schema.add_field(field_name="metadata", datatype=DataType.JSON)
+        schema.add_field(
+            field_name="timestamp", datatype=DataType.VARCHAR, max_length=32
+        )
+        return schema
 
-    def _build_index_params(self) -> dict[str, Any]:
-        """根据配置构建索引参数。"""
-        index_type = self._config.index_type
+    def _build_index_params(self) -> Any:
+        """构建索引参数。"""
+        index_params = MilvusClient.prepare_index_params()
+        index_params.add_index(
+            field_name="vector",
+            index_type=self._config.index_type,
+            metric_type="IP",
+            params={"nlist": self._config.nlist}
+            if self._config.index_type != "HNSW"
+            else {"M": 16, "efConstruction": 200},
+        )
+        return index_params
 
-        params_map: dict[str, dict[str, Any]] = {
-            "IVF_FLAT": {"nlist": self._config.nlist},
-            "IVF_SQ8": {"nlist": self._config.nlist},
-            "HNSW": {"M": 16, "efConstruction": 200},
-        }
-        index_params = params_map.get(index_type, {"nlist": self._config.nlist})
-
-        return {
-            "index_type": index_type,
-            "metric_type": "IP",  # 内积相似度（归一化后等价于余弦）
-            "params": index_params,
-        }
+    def _ensure_client(self) -> MilvusClient:
+        """返回当前客户端，如果未连接则抛出异常。"""
+        if self._client is None:
+            raise RuntimeError("MilvusClient 未连接，请先调用 connect()")
+        return self._client
 
     # ── 生命周期 ──────────────────────────────────────────────────────
 
     async def connect(self) -> None:
         """连接到 Milvus 服务。
 
-        首次连接时 Milvus Proxy 可能尚未就绪（启动需 30-60 秒），
-        此处使用指数退避重试，最多等待约 60 秒。
+        使用指数退避重试，最多等待约 60 秒，应对 Milvus 首次启动时的延迟。
         """
-
-        if self._connected:
-            logger.debug("MilvusStorage 已经连接，无需重复连接。")
+        if self._client is not None:
+            logger.debug("PyMilvusStorage 已连接，跳过")
             return
 
         import asyncio
 
         max_retries = 12
         base_delay = 1.0
+        uri = f"tcp://{self._config.host}:{self._config.port}"
 
         for attempt in range(1, max_retries + 1):
             try:
-                connections.connect(
-                    alias=self._alias,
-                    host=self._config.host,
-                    port=self._config.port,
-                )
-                self._connected = True
+                self._client = MilvusClient(uri=uri)
+                # 验证连接：发送一个轻量请求
+                colls = self._client.list_collections()
                 logger.info(
-                    "成功连接到 Milvus 服务: host=%s, port=%s, alias=%s (第 %d 次尝试)",
-                    self._config.host,
-                    self._config.port,
-                    self._alias,
+                    "MilvusClient 连接成功: %s (第 %d 次尝试),集合：%s",
+                    uri,
                     attempt,
+                    colls,
                 )
                 return
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 delay = base_delay * (1.5 ** (attempt - 1))
                 logger.warning(
                     "Milvus 连接失败（第 %d/%d 次）: %s，%.1f 秒后重试...",
@@ -172,87 +134,66 @@ class PyMilvusStorage(MilvusStorage):
                     e,
                     delay,
                 )
+                self._client = None
                 await asyncio.sleep(delay)
 
-                logger.error(
-                    "Milvus 服务连接超时，已重试 %d 次（约 60 秒）",
-                    max_retries,
-                )
-                raise
+        logger.error("Milvus 服务连接超时，已重试 %d 次", max_retries)
+        raise RuntimeError(f"无法连接到 Milvus: {uri}")
 
     async def close(self) -> None:
-        """
-        断开 Milvus 服务连接。"""
-
-        if not self._connected:
-            logger.debug("MilvusStorage 未连接，无需断开连接。")
+        """断开 Milvus 连接。"""
+        if self._client is None:
             return
-
         try:
-            connections.disconnect(self._alias)
-            self._connected = False
-            logger.info("已断开 Milvus 服务连接: alias= %s", self._alias)
+            self._client.close()
         except Exception as e:  # noqa: BLE001
-            logger.warning("无法断开 Milvus 服务连接: %s", e)
+            logger.warning("关闭 MilvusClient 时出错: %s", e)
+        finally:
+            self._client = None
+            logger.info("PyMilvusStorage 已关闭")
 
     # ── 集合管理 ──────────────────────────────────────────────────────
 
     async def ensure_collection(self, user_id: str) -> None:
-        """确保用户集合已创建，含 Schema 和 IVF_FLAT 索引。
-
-        如果集合已存在则跳过不覆盖，保留已有数据。
-        """
-
+        """确保用户集合已创建（含 Schema 和索引）。"""
+        client = self._ensure_client()
         name = self._collection_name(user_id)
+
         try:
-            if utility.has_collection(name, using=self._alias):
-                logger.debug("用户集合已存在: %s", name)
-                coll = Collection(name, using=self._alias)
-                if not coll.has_index():
-                    index_params = self._build_index_params()
-                    coll.create_index(
-                        field_name="vector",
-                        index_params=index_params,
-                    )  # type: ignore
-                    logger.info("已创建索引: %s", name)
-                    return
+            if client.has_collection(name):
+                logger.debug("集合已存在: %s", name)
+                return
 
-            # 创建合集
             schema = self._build_schema()
-            coll = Collection(
-                name=name,
+            client.create_collection(
+                collection_name=name,
                 schema=schema,
-                using=self._alias,
             )
-            logger.info("已创建用户集合: %s", name)
+            logger.info("集合已创建: %s (dim=%d)", name, self._config.vector_dim)
 
-            # 创建索引
             index_params = self._build_index_params()
-            coll.create_index(
-                field_name="vector",
+            client.create_index(
+                collection_name=name,
                 index_params=index_params,
-            )  # type: ignore
-            logger.info("已创建索引: %s", name)
-
-            # 加载集合到内存
-            coll.load()
-            logger.info("已加载集合到内存: %s", name)
-
+            )
+            logger.info("索引已创建: %s, type=%s", name, self._config.index_type)
         except Exception as e:
-            logger.error("无法创建用户集合:%s %s", name, e)
+            logger.error("创建集合 %s 失败: %s", name, e)
             raise
 
     async def drop_collection(self, user_id: str) -> None:
         """删除指定用户的集合（危险操作！）。"""
+        client = self._ensure_client()
         name = self._collection_name(user_id)
         try:
-            utility.drop_collection(name, using=self._alias)  # type: ignore
+            client.drop_collection(name)
             logger.warning("集合已删除: %s", name)
         except Exception as e:
             logger.error("删除集合 %s 失败: %s", name, e)
             raise
 
     # ── 写入操作 ──────────────────────────────────────────────────────
+
     async def insert(
         self,
         user_id: str,
@@ -262,9 +203,37 @@ class PyMilvusStorage(MilvusStorage):
         content_type: str = "conversation",
         metadata: dict[str, Any] | None = None,
     ) -> int:
-        return 1
+        client = self._ensure_client()
+        name = self._collection_name(user_id)
+
+        from datetime import UTC, datetime
+
+        data = {
+            "vector": vector,
+            "user_id": user_id,
+            "agent_name": agent_name,
+            "text": text,
+            "content_type": content_type,
+            "metadata": json.dumps(metadata or {}),
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+        try:
+            res = client.insert(collection_name=name, data=data)
+            inserted_id = res.get("ids", [0])[0] if isinstance(res, dict) else 0
+            logger.debug(
+                "向量插入成功: id=%s, user=%s, type=%s",
+                inserted_id,
+                user_id,
+                content_type,
+            )
+            return int(inserted_id)
+        except Exception as e:
+            logger.error("向量插入失败 (user=%s): %s", user_id, e)
+            raise
 
     # ── 搜索操作 ──────────────────────────────────────────────────────
+
     async def search(
         self,
         user_id: str,
@@ -273,13 +242,8 @@ class PyMilvusStorage(MilvusStorage):
         agent_name: str | None = None,
         content_type: str | None = None,
     ) -> list[SearchResult]:
-        """向量相似度搜索，支持按 agent_name 和 content_type 过滤。
-
-        搜索前加载集合，确保查询性能。
-        """
+        client = self._ensure_client()
         name = self._collection_name(user_id)
-        coll = Collection(name, using=self._alias)
-        coll.load()
 
         # 构建过滤表达式
         expr_parts = [f'user_id == "{user_id}"']
@@ -290,61 +254,83 @@ class PyMilvusStorage(MilvusStorage):
         expr = " and ".join(expr_parts)
 
         try:
-            results = coll.search(
+            results = client.search(
+                collection_name=name,
                 data=[query_vector],
-                anns_field="vector",
-                param={"metric_type": "IP", "params": {"nprobe": 10}},
                 limit=top_k,
-                expr=expr,
-                output_fields=[],
+                search_params={"metric_type": "IP", "params": {"nprobe": 10}},
+                filter=expr,
+                output_fields=[
+                    "text",
+                    "content_type",
+                    "agent_name",
+                    "metadata",
+                    "timestamp",
+                ],
             )
-        except Exception as e:
-            logger.error("搜索失败: %s", e)
+        except MilvusException as e:
+            logger.error("向量搜索失败 (user=%s): %s", user_id, e)
             raise
 
         parsed: list[SearchResult] = []
-        for hits in results:  # type: ignore
+        for hits in results:
             for hit in hits:
-                text = hit.entity.get("text") or ""
-                content_type_val = hit.entity.get("content_type") or ""
-                agent_name_val = hit.entity.get("agent_name") or ""
-                metadata_raw = hit.entity.get("metadata") or "{}"
-                ts = hit.entity.get("timestamp") or ""
-
-                # metadata 是字符串，需要反序列化
+                entity = hit.get("entity", {})
+                raw_meta = entity.get("metadata", "{}")
                 try:
                     meta = (
-                        json.loads(metadata_raw)
-                        if isinstance(metadata_raw, str)
-                        else {}
+                        json.loads(raw_meta)
+                        if isinstance(raw_meta, str)
+                        else raw_meta or {}
                     )
                 except (json.JSONDecodeError, TypeError):
                     meta = {}
 
                 parsed.append(
                     SearchResult(
-                        id=hit.id,
-                        score=hit.score,
-                        text=text,
-                        content_type=content_type_val,
-                        agent_name=agent_name_val,
+                        id=hit.get("id", 0),
+                        score=hit.get("distance", 0.0),
+                        text=entity.get("text", ""),
+                        content_type=entity.get("content_type", ""),
+                        agent_name=entity.get("agent_name", ""),
                         metadata=meta,
-                        timestamp=ts,
+                        timestamp=entity.get("timestamp", ""),
                     )
                 )
+
         logger.debug("向量搜索完成: user=%s, hits=%d", user_id, len(parsed))
         return parsed
 
-    # ── 管理集合 ──────────────────────────────────────────────────────
-    async def delete_by_filter(
-        self,
-        user_id: str,
-        expr: str,
-    ) -> int:
-        return 1
+    # ── 管理操作 ──────────────────────────────────────────────────────
 
-    async def count(
-        self,
-        user_id: str,
-    ) -> int:
-        return 1
+    async def delete_by_filter(self, user_id: str, expr: str) -> int:
+        """按表达式删除记录。"""
+        client = self._ensure_client()
+        name = self._collection_name(user_id)
+
+        try:
+            res = client.delete(collection_name=name, filter=expr)
+            count = res.get("delete_count", 0) if isinstance(res, dict) else 0
+            logger.info(
+                "向量删除完成: user=%s, expr=%s, count=%d", user_id, expr, count
+            )
+            return count
+        except Exception as e:
+            logger.error("向量删除失败 (user=%s, expr=%s): %s", user_id, expr, e)
+            raise
+
+    async def count(self, user_id: str) -> int:
+        """统计指定用户集合中的记录总数。"""
+        client = self._ensure_client()
+        name = self._collection_name(user_id)
+
+        try:
+            if not client.has_collection(name):
+                return 0
+            res = client.query(
+                collection_name=name, filter="", output_fields=["count(*)"]
+            )
+            return res[0]["count(*)"]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("查询集合数量失败 (user=%s): %s", user_id, e)
+            return 0
