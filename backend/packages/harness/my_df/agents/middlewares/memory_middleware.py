@@ -1,14 +1,17 @@
-"""MemoryMiddleware：在模型调用前从持久化存储加载记忆并注入上下文。
+"""MemoryMiddleware：在模型调用前从持久化存储和向量检索加载记忆并注入上下文。
 
 工作流程：
-1. ``before_model``：从 FileMemoryStorage 读取 memory → 格式化为 <memory_context> XML 块
+1. before_model（同步路径）：从 FileMemoryStorage 读取 memory → 格式化为 <memory_context> XML 块
    → 注入到首条 HumanMessage 前，让模型感知用户背景和历史。
-2. ``after_model``：将当前对话摘要写回存储，更新 lastUpdated。
+2. abefore_model（异步路径）：执行上述 + 调用 Embedding 模型对用户最新消息编码 →
+   在 Milvus 中执行语义检索 → 将 top-k 相关记忆格式化为 <semantic_memory> XML 块 →
+   一并注入 <memory_context>，实现跨会话语义级别的记忆召回。
+3. after_model / aafter_model：将当前对话摘要写回存储，更新 lastUpdated。
 
 依赖：
 - my_df.agents.memory.storage.get_memory_storage() — 存储后端
 - my_df.agents.memory.storage.utc_now_iso_z() — 时间戳
-- user_id 通过 ``config.configurable.user_id`` 传入，默认 "default"。
+- user_id 通过 config.configurable.user_id 传入，默认 "default"。
 """
 
 from __future__ import annotations
@@ -217,6 +220,46 @@ def _extract_facts(
     return facts
 
 
+def _get_latest_user_text(messages: list[Any]) -> str | None:
+    """提取最后一条 HumanMessage 的纯文本（去除系统注入块）。
+
+    返回 cleaned text；若无可用的 HumanMessage 则返回 None。
+    """
+    for msg in reversed(messages):
+        if getattr(msg, "type", "") != "human":
+            continue
+        raw = str(getattr(msg, "content", ""))
+        # 去除可能已被注入的系统块
+        cleaned = re.sub(
+            r"<system-reminder>.*?</system-reminder>|"
+            r"<memory_context>.*?</memory_context>|"
+            r"<semantic_memory>.*?</semantic_memory>",
+            "",
+            raw,
+            flags=re.DOTALL,
+        ).strip()
+        return cleaned if cleaned else None
+    return None
+
+
+def _format_search_results(results: list[Any]) -> str:
+    """将 Milvus 搜索结果格式化为 <semantic_memory> XML 块。
+
+    只保留 score >= 0.3 的结果，避免低质量噪音。
+    """
+    lines = ["<semantic_memory>"]
+    for r in results:
+        score = getattr(r, "score", 0.0)
+        if score < 0.3:
+            continue
+        text = (getattr(r, "text", "") or "")[:500].replace("\n", " ").replace("\r", "")
+        lines.append(f'  <result score="{score:.2f}">')
+        lines.append(f"    <content>{text}</content>")
+        lines.append("  </result>")
+    lines.append("</semantic_memory>")
+    return "\n".join(lines)
+
+
 class MemoryMiddleware(AgentMiddleware):
     """在模型调用前后同步记忆上下文。
 
@@ -251,64 +294,99 @@ class MemoryMiddleware(AgentMiddleware):
 
     # ── before_model：注入记忆 ────────────────────────────────────────────
 
-    def before_model(
-        self,
-        state: AgentState,
-        runtime: Runtime[Any],
-    ) -> dict[str, Any] | None:
-        """模型调用前：加载 memory → 格式化 → 注入首条 HumanMessage。"""
-        messages = state.get("messages")
-        if not messages:
-            return None
-
-        try:
-            memory = self._storage.load(
-                agent_name=self._agent_name, user_id=self._user_id
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("读取 memory 失败: %s", e)
-            return None
-
-        if not memory or not _has_content(memory):
-            logger.debug("memory 为空，跳过注入")
-            return None
-
-        block = _format_memory_block(memory)
-        result = _inject_into_first_human(messages, block)
-        if result is not None:
-            logger.debug("已注入 memory 上下文到首条 HumanMessage")
-            return {"messages": result}
-        return None
-
     async def abefore_model(
         self,
         state: AgentState,
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
-        """异步 hook：委托给同步实现。"""
-        return self.before_model(state, runtime)
+        """异步 hook：JSON 记忆注入 + Milvus 语义检索 + 合并注入。
 
-    # ── after_model：回写记忆 ─────────────────────────────────────────────
-
-    def after_model(
-        self,
-        state: AgentState,
-        runtime: Runtime[Any],
-    ) -> dict[str, Any] | None:
-        """模型调用后：将最近对话写入 memory 存储。"""
+        步骤：
+        1. 从 FileMemoryStorage 加载持久化记忆 → 格式化为 <memory_context> 块
+        2. 用 Embedding 模型对用户最新消息编码 → Milvus search → 格式化为 <semantic_memory> 块
+        3. 合并两个块注入到首条 HumanMessage
+        """
+        logger.info(
+            "abefore_model 被调用, messages=%d, milvus=%s, embedding=%s",
+            len(state.get("messages", []) or []),
+            self._milvus is not None,
+            self._embedding is not None,
+        )
         messages = state.get("messages")
         if not messages:
             return None
 
+        # — 第 1 步：JSON 文件记忆 —
+        block_parts: list[str] = []
         try:
-            # 读取当前 memory（保留已有内容）
+            memory = self._storage.load(
+                agent_name=self._agent_name, user_id=self._user_id
+            )
+            if memory and _has_content(memory):
+                block_parts.append(_format_memory_block(memory))
+        except Exception as e:
+            logger.warning("读取 memory 失败: %s", e)
+
+        # — 第 2 步：Milvus 语义检索 —
+        if self._milvus is not None and self._embedding is not None:
+            logger.info(
+                "语义检索就绪: milvus=%s, embedding=%s, user=%s, agent=%s",
+                type(self._milvus).__name__,
+                type(self._embedding).__name__,
+                self._user_id,
+                self._agent_name,
+            )
+            user_text = _get_latest_user_text(messages)
+            if user_text:
+                try:
+                    query_vec = await self._embedding.encode(user_text)
+                    results = await self._milvus.search(
+                        user_id=self._user_id,
+                        query_vector=query_vec,
+                        top_k=10,
+                        agent_name=self._agent_name,
+                    )
+                    if results:
+                        block_parts.append(_format_search_results(results))
+                        logger.info("语义检索返回 %d 条相关记忆", len(results))
+                except Exception as search_err:
+                    logger.warning("语义检索失败: %s", search_err)
+
+        logger.info(
+            "合并注入前: block_parts=%d, milvus=%s, embedding=%s",
+            len(block_parts),
+            self._milvus is not None,
+            self._embedding is not None,
+        )
+
+        # — 第 3 步：合并注入 —
+        if not block_parts:
+            logger.info("无记忆内容，跳过注入")
+            return None
+
+        combined = "\n\n".join(block_parts)
+        result = _inject_into_first_human(messages, combined)
+        if result is not None:
+            logger.info(
+                "已注入 memory 上下文到首条 HumanMessage (块数=%d, 含语义检索=%s)",
+                len(block_parts),
+                self._milvus is not None and self._embedding is not None,
+            )
+            return {"messages": result}
+        return None
+
+    def _save_json_memory(self, messages: list[Any]) -> dict[str, Any] | None:
+        """将最近对话写入 JSON memory 存储（同步）。"""
+        if not messages:
+            return None
+
+        try:
             memory = self._storage.load(
                 agent_name=self._agent_name, user_id=self._user_id
             )
             if not memory:
                 return None
 
-            # 更新历史上下文中的 recentMonths（最近对话摘要）
             summary = _extract_conversation_summary(messages)
             if "history" not in memory:
                 memory["history"] = {}
@@ -317,7 +395,6 @@ class MemoryMiddleware(AgentMiddleware):
                 "updatedAt": utc_now_iso_z(),
             }
 
-            # 提取新事实并合并到 facts 列表
             max_facts = getattr(get_memory_storage(), "max_facts", 100)
             new_facts = _extract_facts(messages, max_facts)
             existing_facts = memory.get("facts", [])
@@ -325,7 +402,6 @@ class MemoryMiddleware(AgentMiddleware):
             for f in new_facts:
                 if f["id"] not in existing_ids:
                     existing_facts.append(f)
-            # 限制事实总数
             memory["facts"] = existing_facts[:max_facts]
 
             memory["lastUpdated"] = utc_now_iso_z()
@@ -336,8 +412,7 @@ class MemoryMiddleware(AgentMiddleware):
             logger.debug(
                 "memory 已回写 (user=%s), facts=%d", self._user_id, len(new_facts)
             )
-
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("回写 memory 失败: %s", e)
 
         return None
@@ -356,7 +431,8 @@ class MemoryMiddleware(AgentMiddleware):
     ) -> dict[str, Any] | None:
         """异步 hook：先执行同步回写，再尝试 Milvus 向量存储。"""
         # 1. 先执行同步回写（JSON 存储）
-        sync_result = self.after_model(state, runtime)
+        messages = state.get("messages")
+        sync_result = self._save_json_memory(messages)
 
         # 2. 将对话摘要向量化并存入 Milvus
         if self._milvus is not None:
@@ -370,7 +446,7 @@ class MemoryMiddleware(AgentMiddleware):
                             runtime.config.get("configurable", {}).get("thread_id", "")  # type: ignore[union-attr]
                         )
                     except Exception:  # noqa: BLE001
-                        logger.warning("无法获取 thread_id，跳过 Milvus 存储")
+                        logger.warning("无法获取 thread_id，使用空字符串作为默认值")
 
                     # 生成向量：优先使用真实 Embedding 模型，回退到 MD5 占位
                     if self._embedding is not None:

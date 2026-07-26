@@ -177,6 +177,9 @@ class PyMilvusStorage(MilvusStorage):
                             break
                     if existing_dim == self._config.vector_dim:
                         logger.debug("集合已存在且维度匹配: %s", name)
+                        # 确保集合已加载（Milvus 重启后需重新加载）
+                        client.load_collection(name)
+                        logger.debug("集合已加载: %s", name)
                         return
                     logger.warning(
                         "集合 %s 维度不匹配（现有=%d, 期望=%d），删除重建",
@@ -185,11 +188,11 @@ class PyMilvusStorage(MilvusStorage):
                         self._config.vector_dim,
                     )
                     client.drop_collection(name)
-                except Exception as desc_err:
+                except Exception as desc_err:  # noqa: BLE001
                     logger.warning("描述集合 %s 失败，尝试重建: %s", name, desc_err)
                     try:
                         client.drop_collection(name)
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         logger.error("删除集合 %s 失败: %s", name, desc_err)
 
             schema = self._build_schema()
@@ -205,6 +208,10 @@ class PyMilvusStorage(MilvusStorage):
                 index_params=index_params,
             )
             logger.info("索引已创建: %s, type=%s", name, self._config.index_type)
+
+            # 加载集合到内存，搜索前必须执行
+            client.load_collection(name)
+            logger.info("集合已加载: %s", name)
         except Exception as e:
             logger.error("创建集合 %s 失败: %s", name, e)
             raise
@@ -327,6 +334,22 @@ class PyMilvusStorage(MilvusStorage):
                 )
 
         logger.debug("向量搜索完成: user=%s, hits=%d", user_id, len(parsed))
+        return parsed
+
+    async def hybrid_search(
+        self,
+        user_id: str,
+        query_vector: list[float],
+        top_k: int = 5,
+        agent_name: str | None = None,
+        content_type: str | None = None,
+    ) -> list[SearchResult]:
+        # client = self._ensure_client()
+        # name = self.ensure_collection(user_id)
+
+        # 构建索引
+
+        parsed: list[SearchResult] = []
         return parsed
 
     # ── 管理操作 ──────────────────────────────────────────────────────
