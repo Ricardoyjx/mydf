@@ -64,7 +64,7 @@ async def start_run(
     agent_config["configurable"]["user_id"] = "default"
     if body.assistant_id:
         agent_config.setdefault("configurable", {})["assistant_id"] = body.assistant_id
-    agent_factory = make_lead_agent(agent_config, milvus=getattr(request.app.state, 'milvus', None))  # type: ignore
+    agent_factory = make_lead_agent(agent_config, milvus=getattr(request.app.state, 'milvus', None), embedding_model=getattr(request.app.state, 'embedding_model', None))  # type: ignore
     graph_input = body.input
     config = build_run_config(
         thread_id=thread_id,

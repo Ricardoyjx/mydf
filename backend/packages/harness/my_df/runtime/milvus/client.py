@@ -167,6 +167,20 @@ class PyMilvusStorage(MilvusStorage):
 
         try:
             if client.has_collection(name):
+                # 检查维度是否匹配，不匹配则重建
+                existing_schema = await client.describe_collection(name)
+                existing_dim = existing_schema.get("vector_dimension", 0)
+                if existing_dim != self._config.vector_dim:
+                    logger.warning(
+                        "集合 %s 维度不匹配（现有=%d, 期望=%d），删除重建",
+                        name,
+                        existing_dim,
+                        self._config.vector_dim,
+                    )
+                    client.drop_collection(name)
+                else:
+                    logger.debug("集合已存在且维度匹配: %s", name)
+                    return
                 logger.debug("集合已存在: %s", name)
                 return
 

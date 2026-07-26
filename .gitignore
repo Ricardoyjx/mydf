@@ -10,3 +10,4 @@ wheels/
 .venv
 backend/.env
 backend/.deer-flow/
+backend/.deer-flow/checkpoints.db

@@ -1,6 +1,7 @@
 """Lead Agent 工厂：构建具备完整中间件链的默认 Agent。"""
 
 import logging
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -38,6 +39,7 @@ def _build_middlewares(
     *,
     app_config: AppConfig | None = None,
     milvus: MilvusStorage | None = None,
+    embedding_model: Any | None = None,
 ):
     """根据运行时配置构建中间件链。
 
@@ -65,7 +67,12 @@ def _build_middlewares(
 
     # MemoryMiddleware：加载持久化记忆，注入到首条 HumanMessage
     middlewares.append(
-        MemoryMiddleware(agent_name=agent_name, user_id=user_id, milvus=milvus)
+        MemoryMiddleware(
+            agent_name=agent_name,
+            user_id=user_id,
+            milvus=milvus,
+            embedding_model=embedding_model,
+        )
     )
 
     # DynamicContextMiddleware：每次模型调用前注入当前日期时间
@@ -159,12 +166,19 @@ def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
     )
 
 
-def make_lead_agent(config: RunnableConfig, milvus: MilvusStorage | None = None):
+def make_lead_agent(
+    config: RunnableConfig,
+    milvus: MilvusStorage | None = None,
+    embedding_model: Any | None = None,
+):
     """Lead Agent 工厂入口函数。"""
     runtime_config = _get_runtime_config(config)
     runtime_app_config = runtime_config.get("app_config")
     return _make_lead_agent(
-        config, app_config=runtime_app_config or get_app_config(), milvus=milvus
+        config,
+        app_config=runtime_app_config or get_app_config(),
+        milvus=milvus,
+        embedding_model=embedding_model,
     )
 
 
@@ -173,6 +187,7 @@ def _make_lead_agent(
     *,
     app_config: AppConfig,
     milvus: MilvusStorage | None = None,
+    embedding_model: Any | None = None,
 ):
     """Lead Agent 核心工厂。"""
     agent_name = "lead_agent"
@@ -200,6 +215,7 @@ def _make_lead_agent(
             agent_name=agent_name,
             app_config=app_config,
             milvus=milvus,
+            embedding_model=embedding_model,
         ),
         system_prompt="",
         state_schema=ThreadState,
