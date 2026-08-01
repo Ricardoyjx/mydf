@@ -11,6 +11,7 @@ from typing import ClassVar
 from app.gateway.config import get_gateway_config
 from app.gateway.deps import langgraph_runtime
 from app.gateway.routers.memory import router as memory_router
+from app.gateway.routers.rag import router as rag_router
 from app.gateway.routers.runs import router as runs_router
 from app.gateway.routers.threads import router as threads_router
 from dotenv import load_dotenv
@@ -98,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(memory_router)
     app.include_router(threads_router)
+    app.include_router(rag_router)
 
     cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
     app.add_middleware(
