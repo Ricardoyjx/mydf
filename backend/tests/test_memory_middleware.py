@@ -2,9 +2,9 @@
 
 覆盖：
 - 工具函数：_has_content / _format_memory_block / _extract_conversation_summary
-- before_model：空 memory 跳过 / 有 memory 注入 / 无 HumanMessage 跳过
-- after_model：对话回写 / 无消息跳过
-- 完整集成：给定有内容的 storage → before_model 注入 → after_model 更新
+- abefore_model：空 memory 跳过 / 有 memory 注入 / 无 HumanMessage 跳过
+- aafter_model：对话回写 / 无消息跳过
+- 完整集成：给定有内容的 storage → abefore_model 注入 → aafter_model 更新
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from my_df.agents.middlewares.memory_middleware import (
     _extract_conversation_summary,
 )
 from my_df.agents.memory.storage import create_empty_memory, utc_now_iso_z
-
 
 # =============================================================
 # 工具函数测试
@@ -118,13 +117,13 @@ class TestMemoryMiddlewareUnit:
             mw._storage.load.return_value = create_empty_memory()
         return mw
 
-    # ── before_model ──
+    # ── abefore_model ──
 
     def test_before_model_empty_memory_skips(self):
-        """空 memory → before_model 返回 None，不注入"""
+        """空 memory → abefore_model 返回 None，不注入"""
         mw = self._make_middleware(create_empty_memory())
         state = {"messages": [HumanMessage(content="hello")]}
-        result = mw.before_model(state, MagicMock())
+        result = asyncio.run(mw.abefore_model(state, MagicMock()))
         assert result is None
         # 原始消息不该被修改
         assert state["messages"][0].content == "hello"
@@ -136,7 +135,7 @@ class TestMemoryMiddlewareUnit:
 
         mw = self._make_middleware(memory)
         state = {"messages": [HumanMessage(content="帮我写代码")]}
-        result = mw.before_model(state, MagicMock())
+        result = asyncio.run(mw.abefore_model(state, MagicMock()))
 
         assert result is not None
         messages = result["messages"]
@@ -148,7 +147,7 @@ class TestMemoryMiddlewareUnit:
         assert "<memory_context>" in content
 
     def test_before_model_no_human_message_skips(self):
-        """没有 HumanMessage → before_model 返回 None"""
+        """没有 HumanMessage → abefore_model 返回 None"""
         mw = self._make_middleware()
         mw._storage.load.return_value = {
             "version": "1.0",
@@ -158,13 +157,13 @@ class TestMemoryMiddlewareUnit:
             "lastUpdated": "",
         }
         state = {"messages": [AIMessage(content="I am AI")]}
-        result = mw.before_model(state, MagicMock())
+        result = asyncio.run(mw.abefore_model(state, MagicMock()))
         assert result is None
 
     def test_before_model_empty_messages_skips(self):
-        """空消息列表 → before_model 返回 None"""
+        """空消息列表 → abefore_model 返回 None"""
         mw = self._make_middleware()
-        result = mw.before_model({"messages": []}, MagicMock())
+        result = asyncio.run(mw.abefore_model({"messages": []}, MagicMock()))
         assert result is None
 
     def test_before_model_storage_error_graceful(self):
@@ -172,13 +171,13 @@ class TestMemoryMiddlewareUnit:
         mw = self._make_middleware()
         mw._storage.load.side_effect = Exception("磁盘错误")
         state = {"messages": [HumanMessage(content="hello")]}
-        result = mw.before_model(state, MagicMock())
+        result = asyncio.run(mw.abefore_model(state, MagicMock()))
         assert result is None  # 不崩溃
 
-    # ── after_model ──
+    # ── aafter_model ──
 
     def test_after_model_saves_conversation(self):
-        """有消息 → after_model 调用 storage.save()"""
+        """有消息 → aafter_model 调用 storage.save()"""
         mw = self._make_middleware()
         state = {
             "messages": [
@@ -186,19 +185,18 @@ class TestMemoryMiddlewareUnit:
                 AIMessage(content="第一轮回答"),
             ]
         }
-        result = mw.after_model(state, MagicMock())
+        result = asyncio.run(mw.aafter_model(state, MagicMock()))
 
-        assert result is None  # after_model 不返回 state 更新
+        assert result is None  # aafter_model 不返回 state 更新
         mw._storage.save.assert_called_once()
         saved, kwargs = mw._storage.save.call_args
         saved_data = saved[0]
-        assert "workContext" in saved_data.get("user", {})
-        assert "第一轮提问" in saved_data["user"]["workContext"]["summary"]
+        assert "第一轮提问" in saved_data["history"]["recentMonths"]["summary"]
 
     def test_after_model_empty_messages_skips(self):
         """空消息 → 不调用 save()"""
         mw = self._make_middleware()
-        result = mw.after_model({"messages": []}, MagicMock())
+        result = asyncio.run(mw.aafter_model({"messages": []}, MagicMock()))
         assert result is None
         mw._storage.save.assert_not_called()
 
@@ -207,7 +205,7 @@ class TestMemoryMiddlewareUnit:
         mw = self._make_middleware()
         mw._storage.save.side_effect = Exception("写入失败")
         state = {"messages": [HumanMessage(content="hi")]}
-        result = mw.after_model(state, MagicMock())
+        result = asyncio.run(mw.aafter_model(state, MagicMock()))
         assert result is None  # 不崩溃
 
 
@@ -220,7 +218,7 @@ class TestMemoryMiddlewareIntegration:
     """使用真实的 FileMemoryStorage + 临时目录测试完整流程。"""
 
     def test_full_flow_with_tmp_storage(self, tmp_path):
-        """完整流程：写 memory → before_model 读到 → after_model 更新"""
+        """完整流程：写 memory → abefore_model 读到 → aafter_model 更新"""
         from my_df.agents.middlewares.memory_middleware import MemoryMiddleware as MW
         from my_df.agents.memory.storage import FileMemoryStorage
         from my_df.config.path import get_paths
@@ -241,15 +239,15 @@ class TestMemoryMiddlewareIntegration:
             "history": {},
             "facts": [{"id": "f1", "content": "测试很重要"}],
         }
-        storage.save(memory, user_id=user_id)
+        storage.save(memory, agent_name="intg-agent", user_id=user_id)
 
         # 创建中间件，注入真实 storage
-        mw = MW(agent_name="intg_agent", user_id=user_id)
+        mw = MW(agent_name="intg-agent", user_id=user_id)
         mw._storage = storage
 
-        # before_model → 应能读到刚才写入的内容
+        # abefore_model → 应能读到刚才写入的内容
         state = {"messages": [HumanMessage(content="你好")]}
-        result = mw.before_model(state, MagicMock())
+        result = asyncio.run(mw.abefore_model(state, MagicMock()))
 
         assert result is not None
         injected = result["messages"][0].content
@@ -257,18 +255,18 @@ class TestMemoryMiddlewareIntegration:
         assert "测试很重要" in injected
         assert "你好" in injected  # 原始内容保留
 
-        # after_model → 应把新对话写回去
+        # aafter_model → 应把新对话写回去
         state2 = {
             "messages": [
                 HumanMessage(content="新的一轮对话"),
                 AIMessage(content="这是回答"),
             ]
         }
-        mw2 = MW(agent_name="intg_agent", user_id=user_id)
+        mw2 = MW(agent_name="intg-agent", user_id=user_id)
         mw2._storage = storage
-        mw2.after_model(state2, MagicMock())
+        asyncio.run(mw2.aafter_model(state2, MagicMock()))
 
         # 验证写回成功
-        loaded = storage.load(agent_name="intg_agent", user_id=user_id)
-        assert loaded["user"]["workContext"]["summary"] != ""
-        assert "新的一轮对话" in loaded["user"]["workContext"]["summary"]
+        loaded = storage.load(agent_name="intg-agent", user_id=user_id)
+        assert loaded["history"]["recentMonths"]["summary"] != ""
+        assert "新的一轮对话" in loaded["history"]["recentMonths"]["summary"]
