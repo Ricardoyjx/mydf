@@ -21,11 +21,13 @@ from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import AgentMiddleware, Runtime
 
+from my_df.agents.memory.storage import get_memory_storage, utc_now_iso_z
 from my_df.agents.middlewares._injection import (
     get_latest_human_text as _get_latest_user_text,
+)
+from my_df.agents.middlewares._injection import (
     inject_block_into_first_human as _inject_into_first_human,
 )
-from my_df.agents.memory.storage import get_memory_storage, utc_now_iso_z
 from my_df.runtime.milvus.base import MilvusStorage
 
 if TYPE_CHECKING:
@@ -189,9 +191,7 @@ def _extract_facts(
                 continue
             seen.add(content)
 
-            fact_id = (
-                f"fact_{int(datetime.now().timestamp())}_{len(facts)}"  # noqa: DTZ005
-            )
+            fact_id = f"fact_{int(datetime.now().timestamp())}_{len(facts)}"  # noqa: DTZ005
             facts.append(
                 {
                     "id": fact_id,
