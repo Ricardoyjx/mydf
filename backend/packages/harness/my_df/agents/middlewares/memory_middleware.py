@@ -1,12 +1,10 @@
 """MemoryMiddleware：在模型调用前从持久化存储和向量检索加载记忆并注入上下文。
 
 工作流程：
-1. before_model（同步路径）：从 FileMemoryStorage 读取 memory → 格式化为 <memory_context> XML 块
-   → 注入到首条 HumanMessage 前，让模型感知用户背景和历史。
-2. abefore_model（异步路径）：执行上述 + 调用 Embedding 模型对用户最新消息编码 →
-   在 Milvus 中执行语义检索 → 将 top-k 相关记忆格式化为 <semantic_memory> XML 块 →
-   一并注入 <memory_context>，实现跨会话语义级别的记忆召回。
-3. after_model / aafter_model：将当前对话摘要写回存储，更新 lastUpdated。
+1. abefore_model：从 FileMemoryStorage 读取 memory → 格式化为 <memory_context> XML 块；
+   再调用 Embedding 模型对用户最新消息编码 → 在 Milvus 中检索对话记忆 →
+   将 top-k 相关记忆格式化为 <semantic_memory> XML 块 → 一并注入首条 HumanMessage。
+2. aafter_model：将当前对话摘要写回 JSON 存储，并把摘要向量化后写入 Milvus。
 
 依赖：
 - my_df.agents.memory.storage.get_memory_storage() — 存储后端
@@ -23,6 +21,10 @@ from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import AgentMiddleware, Runtime
 
+from my_df.agents.middlewares._injection import (
+    get_latest_human_text as _get_latest_user_text,
+    inject_block_into_first_human as _inject_into_first_human,
+)
 from my_df.agents.memory.storage import get_memory_storage, utc_now_iso_z
 from my_df.runtime.milvus.base import MilvusStorage
 
@@ -86,27 +88,6 @@ def _format_memory_block(memory: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _inject_into_first_human(
-    messages: list[Any],
-    block: str,
-) -> list[Any] | None:
-    """将 memory block 注入到列表中首条 HumanMessage 的 content 前。
-
-    返回：
-        更新后的 messages 列表；若没有 HumanMessage 则返回 None。
-    """
-    for msg in messages:
-        if getattr(msg, "type", None) != "human":
-            continue
-        original = msg.content or ""
-        if isinstance(original, str):
-            msg.content = f"{block}\n\n{original}"
-        elif isinstance(original, list):
-            msg.content = [{"type": "text", "text": block}, *original]
-        return messages
-    return None
-
-
 def _extract_conversation_summary(messages: list[Any], max_turns: int = 20) -> str:
     """从对话记录中提取 user ↔ assistant 交换摘要。
 
@@ -118,7 +99,9 @@ def _extract_conversation_summary(messages: list[Any], max_turns: int = 20) -> s
 
     _SYSTEM_BLOCKS_RE = re.compile(
         r"<system-reminder>.*?</system-reminder>|"
-        r"<memory_context>.*?</memory_context>",
+        r"<memory_context>.*?</memory_context>|"
+        r"<semantic_memory>.*?</semantic_memory>|"
+        r"<rag_context>.*?</rag_context>",
         re.DOTALL,
     )
 
@@ -168,7 +151,10 @@ def _extract_facts(
 
     raw = str(getattr(user_msg, "content", ""))
     cleaned = re.sub(
-        r"<system-reminder>.*?</system-reminder>|<memory_context>.*?</memory_context>",
+        r"<system-reminder>.*?</system-reminder>|"
+        r"<memory_context>.*?</memory_context>|"
+        r"<semantic_memory>.*?</semantic_memory>|"
+        r"<rag_context>.*?</rag_context>",
         "",
         raw,
         flags=re.DOTALL,
@@ -203,7 +189,9 @@ def _extract_facts(
                 continue
             seen.add(content)
 
-            fact_id = f"fact_{int(datetime.now().timestamp())}_{len(facts)}"  # noqa: DTZ005
+            fact_id = (
+                f"fact_{int(datetime.now().timestamp())}_{len(facts)}"  # noqa: DTZ005
+            )
             facts.append(
                 {
                     "id": fact_id,
@@ -218,28 +206,6 @@ def _extract_facts(
                 return facts
 
     return facts
-
-
-def _get_latest_user_text(messages: list[Any]) -> str | None:
-    """提取最后一条 HumanMessage 的纯文本（去除系统注入块）。
-
-    返回 cleaned text；若无可用的 HumanMessage 则返回 None。
-    """
-    for msg in reversed(messages):
-        if getattr(msg, "type", "") != "human":
-            continue
-        raw = str(getattr(msg, "content", ""))
-        # 去除可能已被注入的系统块
-        cleaned = re.sub(
-            r"<system-reminder>.*?</system-reminder>|"
-            r"<memory_context>.*?</memory_context>|"
-            r"<semantic_memory>.*?</semantic_memory>",
-            "",
-            raw,
-            flags=re.DOTALL,
-        ).strip()
-        return cleaned if cleaned else None
-    return None
 
 
 def _format_search_results(results: list[Any]) -> str:
@@ -261,10 +227,10 @@ def _format_search_results(results: list[Any]) -> str:
 
 
 class MemoryMiddleware(AgentMiddleware):
-    """在模型调用前后同步记忆上下文。
+    """在模型调用前后异步同步记忆上下文。
 
-    - ``before_model``：从存储加载 memory，注入到首条 HumanMessage。
-    - ``after_model``：将最近对话写入 memory 的 history.recentMonths。
+    - ``abefore_model``：从存储加载 memory + 检索对话语义记忆，注入到首条 HumanMessage。
+    - ``aafter_model``：将最近对话写入 memory 的 history.recentMonths。
     """
 
     def __init__(
@@ -345,6 +311,7 @@ class MemoryMiddleware(AgentMiddleware):
                         query_vector=query_vec,
                         top_k=10,
                         agent_name=self._agent_name,
+                        content_type="conversation",
                     )
                     if results:
                         block_parts.append(_format_search_results(results))
