@@ -10,6 +10,7 @@ from langchain_core.runnables import RunnableConfig
 
 from my_df.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
 from my_df.agents.middlewares.memory_middleware import MemoryMiddleware
+from my_df.agents.middlewares.rag_middleware import RagMiddleware
 from my_df.agents.middlewares.runtime_middlewares import (
     build_lead_runtime_middlewares,
 )
@@ -46,8 +47,9 @@ def _build_middlewares(
     中间件注册顺序（按执行先后）：
     1. 运行时基础中间件（预留扩展）
     2. MemoryMiddleware：加载持久化记忆，注入到首条 HumanMessage（调用后回写）
-    3. DynamicContextMiddleware：每次模型调用前注入当前日期时间
-    4. TodoMiddleware：仅 ``is_plan_mode=True`` 时注册
+    3. RagMiddleware：检索知识库并注入 <rag_context>
+    4. DynamicContextMiddleware：每次模型调用前注入当前日期时间
+    5. TodoMiddleware：仅 ``is_plan_mode=True`` 时注册
 
     参数：
         config:            运行配置，包含 user_id 等。
@@ -68,6 +70,16 @@ def _build_middlewares(
     # MemoryMiddleware：加载持久化记忆，注入到首条 HumanMessage
     middlewares.append(
         MemoryMiddleware(
+            agent_name=agent_name,
+            user_id=user_id,
+            milvus=milvus,
+            embedding_model=embedding_model,
+        )
+    )
+
+    # RagMiddleware：检索用户知识库（Milvus/Embedding 不可用时自动跳过）
+    middlewares.append(
+        RagMiddleware(
             agent_name=agent_name,
             user_id=user_id,
             milvus=milvus,
