@@ -84,9 +84,11 @@ class PyMilvusStorage(MilvusStorage):
             field_name="vector",
             index_type=self._config.index_type,
             metric_type="IP",
-            params={"nlist": self._config.nlist}
-            if self._config.index_type != "HNSW"
-            else {"M": 16, "efConstruction": 200},
+            params=(
+                {"nlist": self._config.nlist}
+                if self._config.index_type != "HNSW"
+                else {"M": 16, "efConstruction": 200}
+            ),
         )
         return index_params
 
@@ -95,6 +97,30 @@ class PyMilvusStorage(MilvusStorage):
         if self._client is None:
             raise RuntimeError("MilvusClient 未连接，请先调用 connect()")
         return self._client
+
+    @staticmethod
+    def _build_filter_expr(
+        user_id: str,
+        agent_name: str | None = None,
+        content_type: str | None = None,
+    ) -> str:
+        """构建 Milvus 过滤表达式，默认按用户隔离。"""
+        expr_parts = [f'user_id == "{user_id}"']
+        if agent_name:
+            expr_parts.append(f'agent_name == "{agent_name}"')
+        if content_type:
+            expr_parts.append(f'content_type == "{content_type}"')
+        return " and ".join(expr_parts)
+
+    @staticmethod
+    def _parse_metadata(raw: Any) -> dict[str, Any]:
+        """解析 Milvus JSON 字段，兼容字符串与 dict 两种返回形态。"""
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return raw or {}
 
     # ── 属性 ──────────────────────────────────────────────────────────
 
@@ -280,13 +306,7 @@ class PyMilvusStorage(MilvusStorage):
         client = self._ensure_client()
         name = self._collection_name(user_id)
 
-        # 构建过滤表达式
-        expr_parts = [f'user_id == "{user_id}"']
-        if agent_name:
-            expr_parts.append(f'agent_name == "{agent_name}"')
-        if content_type:
-            expr_parts.append(f'content_type == "{content_type}"')
-        expr = " and ".join(expr_parts)
+        expr = self._build_filter_expr(user_id, agent_name, content_type)
 
         try:
             results = client.search(
@@ -311,15 +331,7 @@ class PyMilvusStorage(MilvusStorage):
         for hits in results:
             for hit in hits:
                 entity = hit.get("entity", {})
-                raw_meta = entity.get("metadata", "{}")
-                try:
-                    meta = (
-                        json.loads(raw_meta)
-                        if isinstance(raw_meta, str)
-                        else raw_meta or {}
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    meta = {}
+                meta = self._parse_metadata(entity.get("metadata", "{}"))
 
                 parsed.append(
                     SearchResult(
@@ -335,6 +347,79 @@ class PyMilvusStorage(MilvusStorage):
 
         logger.debug("向量搜索完成: user=%s, hits=%d", user_id, len(parsed))
         return parsed
+
+    async def list_records(
+        self,
+        user_id: str,
+        content_type: str | None = None,
+        agent_name: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[SearchResult]:
+        """按过滤条件列出向量记录，供知识库管理接口使用。"""
+        client = self._ensure_client()
+        name = self._collection_name(user_id)
+        if not client.has_collection(name):
+            return []
+
+        expr = self._build_filter_expr(user_id, agent_name, content_type)
+        try:
+            rows = client.query(
+                collection_name=name,
+                filter=expr,
+                output_fields=[
+                    "id",
+                    "text",
+                    "content_type",
+                    "agent_name",
+                    "metadata",
+                    "timestamp",
+                ],
+                limit=limit,
+                offset=offset,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("向量列表查询失败 (user=%s): %s", user_id, e)
+            raise
+
+        parsed: list[SearchResult] = []
+        for row in rows:
+            parsed.append(
+                SearchResult(
+                    id=row.get("id", 0),
+                    score=0.0,
+                    text=row.get("text", ""),
+                    content_type=row.get("content_type", ""),
+                    agent_name=row.get("agent_name", ""),
+                    metadata=self._parse_metadata(row.get("metadata", "{}")),
+                    timestamp=row.get("timestamp", ""),
+                )
+            )
+        logger.debug("向量列表查询完成: user=%s, rows=%d", user_id, len(parsed))
+        return parsed
+
+    async def delete_by_ids(self, user_id: str, ids: list[int]) -> int:
+        """按主键批量删除向量记录。"""
+        if not ids:
+            return 0
+
+        client = self._ensure_client()
+        name = self._collection_name(user_id)
+        try:
+            res = client.delete(collection_name=name, ids=list(ids))
+            count = (
+                res.get("delete_count", len(ids)) if isinstance(res, dict) else len(ids)
+            )
+            logger.info(
+                "向量按 ID 删除完成: user=%s, ids=%d, count=%d",
+                user_id,
+                len(ids),
+                count,
+            )
+            return int(count)
+        except Exception as e:
+            logger.error("向量按 ID 删除失败 (user=%s): %s", user_id, e)
+            raise
 
     async def hybrid_search(
         self,

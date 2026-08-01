@@ -127,6 +127,42 @@ class MilvusStorage(abc.ABC):
         ...
 
     @abc.abstractmethod
+    async def list_records(
+        self,
+        user_id: str,
+        content_type: str | None = None,
+        agent_name: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[SearchResult]:
+        """按过滤条件列出向量记录（不含相似度分数）。
+
+        参数：
+            user_id:      用户标识（必填，用于隔离搜索范围）。
+            content_type: 可选，按内容类型过滤。
+            agent_name:   可选，按 agent 名称过滤。
+            limit:        返回条数上限。
+            offset:       跳过条数，用于分页。
+
+        返回：
+            SearchResult 列表，按插入顺序返回。
+        """
+        ...
+
+    @abc.abstractmethod
+    async def delete_by_ids(self, user_id: str, ids: list[int]) -> int:
+        """按向量主键批量删除记录。
+
+        参数：
+            user_id: 用户标识（必填，用于隔离搜索范围）。
+            ids:     待删除的向量主键列表。
+
+        返回：
+            删除的向量数量。
+        """
+        ...
+
+    @abc.abstractmethod
     async def delete_by_filter(self, user_id: str, expr: str) -> int:
         """删除满足过滤条件的向量。
 
