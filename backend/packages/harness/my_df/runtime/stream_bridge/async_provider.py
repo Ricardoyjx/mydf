@@ -1,11 +1,11 @@
 """Async stream bridge factory.
 
 Provides an **async context manager** aligned with
-:func:`deerflow.runtime.checkpointer.async_provider.make_checkpointer`.
+:func:`my_df.runtime.checkpointer.async_provider.make_checkpointer`.
 
 Usage (e.g. FastAPI lifespan)::
 
-    from deerflow.agents.stream_bridge import make_stream_bridge
+    from my_df.runtime.stream_bridge.async_provider import make_stream_bridge
 
     async with make_stream_bridge() as bridge:
         app.state.stream_bridge = bridge
@@ -20,7 +20,6 @@ from collections.abc import AsyncIterator
 from my_df.config.app_config import AppConfig
 from my_df.config.stream_bridge_config import get_stream_bridge_config
 from my_df.runtime.stream_bridge.memory import InMemoryStreamBridge
-
 
 from .base import StreamBridge
 

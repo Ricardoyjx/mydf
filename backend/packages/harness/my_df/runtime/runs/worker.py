@@ -52,7 +52,7 @@ async def run_agent_mini(
         run_id:        当前运行 ID。
         context:       基础设施依赖（checkpointer、store 等）。
     """
-    # 1. 注入 checkpointer（图编译后附着，模仿 deer-flow 方案）
+    # 1. 注入 checkpointer（图编译后附着，模仿 LangGraph Platform 方案）
     if context.checkpointer is not None:
         agent_factory.checkpointer = context.checkpointer
 
@@ -130,5 +130,5 @@ async def process_chunk(bridge: StreamBridge, run_id: str, chunk: dict):
             # 最终回退：发原始字符串
             await bridge.publish(run_id, "updates", raw[:200])
     except Exception as e:
-        logger.error("process_chunk error: %s", e, exc_info=True)
+        logger.error("process_chunk error: %s", e, exc_info=True)  # noqa: G201
         await bridge.publish(run_id, "error", {"message": f"process_chunk: {e}"})

@@ -290,7 +290,7 @@ class MemoryMiddleware(AgentMiddleware):
             )
             if memory and _has_content(memory):
                 block_parts.append(_format_memory_block(memory))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("读取 memory 失败: %s", e)
 
         # — 第 2 步：Milvus 语义检索 —
@@ -316,7 +316,7 @@ class MemoryMiddleware(AgentMiddleware):
                     if results:
                         block_parts.append(_format_search_results(results))
                         logger.info("语义检索返回 %d 条相关记忆", len(results))
-                except Exception as search_err:
+                except Exception as search_err:  # noqa: BLE001
                     logger.warning("语义检索失败: %s", search_err)
 
         logger.info(
@@ -379,7 +379,7 @@ class MemoryMiddleware(AgentMiddleware):
             logger.debug(
                 "memory 已回写 (user=%s), facts=%d", self._user_id, len(new_facts)
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("回写 memory 失败: %s", e)
 
         return None

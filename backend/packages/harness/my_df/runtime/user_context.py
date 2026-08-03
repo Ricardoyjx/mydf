@@ -1,5 +1,5 @@
-from typing import Final, Protocol, runtime_checkable
 from contextvars import ContextVar
+from typing import Final, Protocol, runtime_checkable
 
 
 @runtime_checkable

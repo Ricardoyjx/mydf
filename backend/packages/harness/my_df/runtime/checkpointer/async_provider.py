@@ -7,12 +7,12 @@ Supported backends: memory, sqlite, postgres.
 
 Usage (e.g. FastAPI lifespan)::
 
-    from deerflow.runtime.checkpointer.async_provider import make_checkpointer
+    from my_df.runtime.checkpointer.async_provider import make_checkpointer
 
     async with make_checkpointer() as checkpointer:
         app.state.checkpointer = checkpointer  # InMemorySaver if not configured
 
-For sync usage see :mod:`deerflow.runtime.checkpointer.provider`.
+For sync usage see :mod:`my_df.runtime.checkpointer.provider`.
 """
 
 from __future__ import annotations

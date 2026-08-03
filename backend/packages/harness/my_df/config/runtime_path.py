@@ -6,23 +6,23 @@ from pathlib import Path
 
 def project_root() -> Path:
     """Return the caller project root for runtime-owned files."""
-    if env_root := os.getenv("DEER_FLOW_PROJECT_ROOT"):
+    if env_root := os.getenv("MYDF_PROJECT_ROOT"):
         root = Path(env_root).resolve()
         if not root.exists():
             raise ValueError(
-                f"DEER_FLOW_PROJECT_ROOT is set to '{env_root}', but the resolved path '{root}' does not exist."
+                f"MYDF_PROJECT_ROOT is set to '{env_root}', but the resolved path '{root}' does not exist."
             )
         if not root.is_dir():
             raise ValueError(
-                f"DEER_FLOW_PROJECT_ROOT is set to '{env_root}', but the resolved path '{root}' is not a directory."
+                f"MYDF_PROJECT_ROOT is set to '{env_root}', but the resolved path '{root}' is not a directory."
             )
         return root
     return Path.cwd().resolve()
 
 
 def runtime_home() -> Path:
-    """Return the writable DeerFlow state directory."""
-    if env_home := os.getenv("DEER_FLOW_HOME"):
+    """Return the writable my-df state directory."""
+    if env_home := os.getenv("MYDF_HOME"):
         return Path(env_home).resolve()
     return project_root() / ".deer-flow"
 

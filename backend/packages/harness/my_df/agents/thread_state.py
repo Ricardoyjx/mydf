@@ -1,17 +1,20 @@
 """线程状态类型定义：LangGraph Agent 的核心 State schema。"""
 
-from langchain.agents import AgentState
 from typing import Annotated, NotRequired, TypedDict
+
+from langchain.agents import AgentState
 from langchain.agents.middleware.todo import Todo
 
 
 class SandboxState(TypedDict):
     """沙箱环境状态。"""
+
     sandbox_id: NotRequired[str | None]
 
 
 class ThreadDataState(TypedDict):
     """线程数据目录状态。"""
+
     workspace_path: NotRequired[str | None]
     uploads_path: NotRequired[str | None]
     outputs_path: NotRequired[str | None]
@@ -19,6 +22,7 @@ class ThreadDataState(TypedDict):
 
 class ViewedImageData(TypedDict):
     """已查看图像的缓存数据。"""
+
     base64: str
     mime_type: str
 

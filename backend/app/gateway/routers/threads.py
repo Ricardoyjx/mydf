@@ -2,11 +2,11 @@
 
 import logging
 import re
-from typing import Any
 
 from app.gateway.deps import get_checkpointer
 from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import message_to_dict
+from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +26,11 @@ async def get_thread_messages(thread_id: str, request: Request):
     if checkpointer is None:
         raise HTTPException(status_code=503, detail="Checkpointer not available")
 
-    config = {"configurable": {"thread_id": thread_id}}
-
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     try:
         # 获取最新 checkpoint
         checkpoint_tuple = await checkpointer.aget_tuple(config)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("读取 checkpoint 失败 (thread=%s): %s", thread_id, e)
         raise HTTPException(status_code=500, detail=f"读取历史失败: {e}")
 
@@ -76,12 +75,12 @@ async def get_thread_messages(thread_id: str, request: Request):
                     "id": d.get("id", ""),
                 }
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # 回退：直接读 .content 属性
             raw = str(getattr(msg, "content", ""))
             role = str(getattr(msg, "type", "unknown"))
             serialized.append({"role": role, "content": _clean_content(raw), "id": ""})
-
+            logger.warning("序列化消息失败 (thread=%s): %s", thread_id, e)
     return {
         "thread_id": thread_id,
         "messages": serialized,

@@ -2,11 +2,11 @@
 
 import uuid
 
-from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
 from app.gateway.routers.thread_runs import RunCreateRequest
 from app.gateway.services import see_consumer, start_run
-from app.gateway.deps import get_stream_bridge, get_run_manager, get_run_context
+from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 

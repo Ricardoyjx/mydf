@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException, Request
+from langchain_core.runnables import RunnableConfig
 from my_df.agents.lead_agent.agent import make_lead_agent
 from my_df.runtime.runs.manager import RunManager, RunRecord
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
@@ -59,12 +60,17 @@ async def start_run(
         raise HTTPException(status_code=400, detail=str(e))
 
     # 构造 agent 配置并启动后台运行
-    agent_config: dict[str, Any] = {"recursion_limit": 100}
-    agent_config.setdefault("configurable", {})
-    agent_config["configurable"]["user_id"] = "default"
+    agent_config: RunnableConfig = {
+        "recursion_limit": 100,
+        "configurable": {"user_id": "default"},
+    }
     if body.assistant_id:
-        agent_config.setdefault("configurable", {})["assistant_id"] = body.assistant_id
-    agent_factory = make_lead_agent(agent_config, milvus=getattr(request.app.state, 'milvus', None), embedding_model=getattr(request.app.state, 'embedding_model', None))  # type: ignore
+        agent_config["configurable"]["assistant_id"] = body.assistant_id
+    agent_factory = make_lead_agent(
+        agent_config,
+        milvus=getattr(request.app.state, "milvus", None),
+        embedding_model=getattr(request.app.state, "embedding_model", None),
+    )  # type: ignore
     graph_input = body.input
     config = build_run_config(
         thread_id=thread_id,

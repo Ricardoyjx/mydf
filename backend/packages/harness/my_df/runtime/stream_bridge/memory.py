@@ -8,9 +8,9 @@ SSE 消费者通过 ``subscribe`` 异步迭代读取。
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
-import uuid
 
 from my_df.runtime.stream_bridge.base import (
     END_SENTINEL,  # 流结束哨兵
@@ -93,4 +93,3 @@ class InMemoryStreamBridge(StreamBridge):
         由 make_stream_bridge 的 finally 块调用。
         """
         self._queues.clear()
-

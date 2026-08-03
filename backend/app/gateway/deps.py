@@ -27,28 +27,19 @@ logger = logging.getLogger(__name__)
 async def langgraph_runtime(
     app: FastAPI, startup_config: AppConfig
 ) -> AsyncGenerator[None, None]:
-    """引导并拆除所有 Lang Graph 运行时单例
+    """引导并拆除所有 LangGraph 运行时单例。
 
-    “启动配置”是“应用程序配置”期间拍摄的快照
-    一次性基础设施引导程序的“lifespan ()” 引擎和
-    此处构建的存储（流桥、持久化引擎、检查点、
-    store 、 run event store ）是设计所要求的重新启动 - 它们保持活动状态
-    连接、文件句柄或单例提供程序 - 因此它们绑定到此
-    快照并在“config yaml”编辑中生存请求时间消费者
-    仍然必须通过 :func :`get config ` 对于任何应该是的字段
-    可热重载 请参阅``backend /CLAUDE md ``“配置热重载边界”
+    lifespan 启动时在此处构建流桥、checkpointer、store 等基础设施，
+    它们持有连接、文件句柄等资源，必须与启动时的配置快照绑定，
+    因此存活于整个应用生命周期，不随配置热重载变化。
 
-    匹配的“运行事件配置”被冻结到“应用程序状态”，因此
-    :func :`get run context ` 将新加载的 ``App Config `` 与
-    *启动时间*运行事件配置底层``事件存储``
-    是从构建的 - 否则运行时可能最终会结合实时
-    新的“运行事件配置”，事件存储仍然绑定到
-    以前的后端
+    ``get_run_context()`` 会将新加载的 ``AppConfig`` 与启动时冻结的
+    运行事件配置配对使用，避免“新配置 + 旧存储后端”的错配。
 
-    在``app py``中的用法::
+    用法（app.py 的 lifespan 中）::
 
-        与 langgraph 运行时异步（应用程序，启动配置）：
-            产量 = yield
+        async with langgraph_runtime(app, startup_config):
+            yield
     """
     async with AsyncExitStack() as stack:
         config = startup_config
@@ -100,7 +91,7 @@ get_stream_bridge: Callable[[Request], StreamBridge] = _require(
 get_run_manager: Callable[[Request], RunManager] = _require(
     "run_manager", "Run manager"
 )
-get_checkpointer: Callable[[Request], Checkpointer] = _require(
+get_checkpointer: Callable[[Request], BaseCheckpointSaver | None] = _require(
     "checkpointer", "Checkpointer"
 )
 # get_run_event_store: Callable[[Request], RunEventStore] = _require(
@@ -118,14 +109,12 @@ def get_store(request: Request):
 
 
 def get_run_context(request: Request) -> RunContext:
-    """从 ``app state `` 单例构建一个 :class :`Run Context `
+    """从 app.state 单例构建一个 :class:`RunContext`。
 
-     返回具有基础设施依赖项的 *base * 上下文
-     ``app config `` 字段是实时解析的，因此每个运行字段（例如
-    ``models [*] max tokens ``) 遵循 ``config yaml `` 编辑；的
-     “事件存储”/“运行事件配置”对保持冻结到快照
-     在 :func :`langgraph Runtime` 中捕获，因此调用者永远不会看到存储绑定
-     一个后端与指向另一个后端的配置配对
+    基础上下文持有 checkpointer、store 等基础设施依赖；
+    ``app_config`` 字段在每次请求时实时解析，因此模型等配置
+    修改可以热生效。事件存储与运行事件配置保持启动时的配对，
+    避免存储后端与配置指向不一致。
     """
 
     return RunContext(

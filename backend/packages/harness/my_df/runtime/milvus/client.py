@@ -378,7 +378,7 @@ class PyMilvusStorage(MilvusStorage):
                 limit=limit,
                 offset=offset,
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001, RUF100
             logger.error("向量列表查询失败 (user=%s): %s", user_id, e)
             raise
 

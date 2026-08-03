@@ -120,7 +120,7 @@ class RunManager:
             if record.task is not None and not record.task.done():
                 record.task.cancel()
             record.status = RunStatus.interrupted
-            record.updated_at = datetime.now().isoformat()
+            record.updated_at = datetime.now().isoformat()  # noqa: DTZ005
         logger.info("运行 %s 已取消（action=%s）", run_id, action)
         return True
 
@@ -193,7 +193,7 @@ class RunManager:
         与 create（创建任务）分开执行时可能出现的“检查与使用时的条件竞争”（TOCTOU race）问题
         """
         run_id = str(uuid.uuid4())
-        now = datetime.now().isoformat()
+        now = datetime.now().isoformat()  # noqa: DTZ005
 
         record = RunRecord(
             run_id=run_id,

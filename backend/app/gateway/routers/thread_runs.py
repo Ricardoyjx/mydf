@@ -12,7 +12,7 @@ class RunCreateRequest(BaseModel):
         default=None, description="使用的 Agent / assistant 名称"
     )
     input: dict[str, Any] | None = Field(
-        default=None, description="LangGraph 图输入（如 {\"messages\": [...]}）"
+        default=None, description='LangGraph 图输入（如 {"messages": [...]}）'
     )
     command: dict[str, Any] | None = Field(
         default=None, description="LangGraph Command（直接指令模式）"
@@ -25,9 +25,7 @@ class RunCreateRequest(BaseModel):
         default=None, description="运行时上下文覆盖（model_name、thinking_enabled 等）"
     )
     webhook: str | None = Field(default=None, description="运行完成后的回调 URL")
-    checkpoint_id: str | None = Field(
-        default=None, description="从指定检查点恢复运行"
-    )
+    checkpoint_id: str | None = Field(default=None, description="从指定检查点恢复运行")
     checkpoint: dict[str, Any] | None = Field(
         default=None, description="完整的检查点对象"
     )
@@ -38,11 +36,9 @@ class RunCreateRequest(BaseModel):
         default=None, description="在此节点列表之后中断"
     )
     stream_mode: list[str] | str | None = Field(
-        default=None, description="流模式（如 \"values\"、\"updates\"）"
+        default=None, description='流模式（如 "values"、"updates"）'
     )
-    stream_subgraphs: bool = Field(
-        default=False, description="是否包含子图事件"
-    )
+    stream_subgraphs: bool = Field(default=False, description="是否包含子图事件")
     stream_resumable: bool | None = Field(
         default=None, description="SSE 是否支持断线重连"
     )

@@ -34,7 +34,6 @@ class RunStore(abc.ABC):
         created_at: str | None = None,
     ) -> None:
         """写入一条运行记录。"""
-        pass
 
     @abc.abstractmethod
     async def get(
@@ -44,7 +43,6 @@ class RunStore(abc.ABC):
         user_id: str | None = None,
     ) -> dict[str, Any] | None:
         """查询单条运行记录。"""
-        pass
 
     @abc.abstractmethod
     async def list_by_thread(
@@ -55,7 +53,6 @@ class RunStore(abc.ABC):
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """按线程列出运行记录。"""
-        pass
 
     @abc.abstractmethod
     async def update_status(
@@ -70,12 +67,10 @@ class RunStore(abc.ABC):
         返回 ``False`` 表示存储可以证明没有行被更新；
         轻量级或旧版存储可能返回 ``None``（无法报告行数）。
         """
-        pass
 
     @abc.abstractmethod
     async def delete(self, run_id: str) -> None:
         """删除运行记录。"""
-        pass
 
     @abc.abstractmethod
     async def update_model_name(
@@ -84,7 +79,6 @@ class RunStore(abc.ABC):
         model_name: str | None,
     ) -> None:
         """更新已有运行的 model_name 字段。"""
-        pass
 
     @abc.abstractmethod
     async def update_run_completion(
@@ -105,7 +99,6 @@ class RunStore(abc.ABC):
         error: str | None = None,
     ) -> bool | None:
         """持久化最终完成状态字段。"""
-        pass
 
     async def update_run_progress(
         self,
@@ -123,17 +116,14 @@ class RunStore(abc.ABC):
         first_human_message: str | None = None,
     ) -> None:
         """运行时进度快照（尽力而为，不改变运行状态）。"""
-        return None
 
     @abc.abstractmethod
     async def list_pending(self, *, before: str | None = None) -> list[dict[str, Any]]:
         """列出指定时间之前的待处理运行。"""
-        pass
 
     @abc.abstractmethod
     async def list_inflight(self, *, before: str | None = None) -> list[dict[str, Any]]:
         """返回仍处于 ``pending`` 或 ``running`` 状态的已持久化运行。"""
-        pass
 
     @abc.abstractmethod
     async def aggregate_tokens_by_thread(
@@ -145,4 +135,3 @@ class RunStore(abc.ABC):
         total_tokens, total_input_tokens, total_output_tokens, total_runs,
         by_model（model_name → {tokens, runs}）, by_caller（lead_agent/subagent/middleware）。
         """
-        pass
