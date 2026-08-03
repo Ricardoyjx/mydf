@@ -41,13 +41,9 @@ async def make_milvus_storage(
     Yields:
         MilvusStorage 实例（已连接状态）。
     """
-    if app_config is not None:
-        config = (
-            app_config.milvus
-            if hasattr(app_config, "milvus") and app_config.milvus
-            else None
-        )
-    if app_config is None:
+    if app_config is not None and app_config.milvus is not None:
+        config = app_config.milvus
+    else:
         config = get_milvus_config()
     if config is None:
         config = MilvusConfig()

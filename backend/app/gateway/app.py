@@ -60,7 +60,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 3. 初始化 Milvus 向量存储（可选，失败不影响应用启动）
     _milvus_stack = AsyncExitStack()
     try:
-        milvus = await _milvus_stack.enter_async_context(make_milvus_storage())
+        milvus = await _milvus_stack.enter_async_context(
+            make_milvus_storage(startup_config)
+        )
         await milvus.ensure_collection("default")
         app.state.milvus = milvus
         logger.info("Milvus 向量存储已就绪")
@@ -70,7 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # 4. 初始化本地 Embedding 模型（可选，失败不影响应用启动）
     try:
-        embedder = SentenceEmbeddings()
+        embedder = SentenceEmbeddings(model_name=startup_config.embedding.model)
         await embedder.load()
         app.state.embedding_model = embedder
         logger.info(

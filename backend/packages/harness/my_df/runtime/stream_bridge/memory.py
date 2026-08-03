@@ -37,7 +37,7 @@ class InMemoryStreamBridge(StreamBridge):
         q = self._queues.get(run_id)
         if q is None:
             # 懒创建队列
-            q = asyncio.Queue()
+            q = asyncio.Queue(maxsize=self._maxsize)
             self._queues[run_id] = q
         await q.put(StreamEvent(id=str(uuid.uuid4()), event=event, data=data))
 
@@ -69,7 +69,7 @@ class InMemoryStreamBridge(StreamBridge):
         """
         q = self._queues.get(run_id)
         if q is None:
-            q = asyncio.Queue()
+            q = asyncio.Queue(maxsize=self._maxsize)
             self._queues[run_id] = q
         while True:
             try:

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from my_df.config.checkpointer_config import CheckpointerConfig, CheckpointerType
 from my_df.config.embedding_config import EmbeddingConfig
-from my_df.config.milvus_config import MilvusConfig
+from my_df.config.milvus_config import MilvusConfig, load_milvus_config_from_env
 from my_df.config.model_config import ModelConfig
 from my_df.config.stream_bridge_config import StreamBridgeConfig
 
@@ -125,6 +125,7 @@ def get_app_config() -> AppConfig:
         checkpointer=checkpointer,
         is_plan_mode=is_plan_mode,
         embedding=load_embedding_config_from_env(),
+        milvus=load_milvus_config_from_env(),
     )
 
     logger.info(

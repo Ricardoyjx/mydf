@@ -34,6 +34,11 @@ async def start_run(
     # run_mgr = get_run_manager(request)  # 暂未启用持久化管理
 
     now = datetime.now().isoformat()  # noqa: DTZ005
+    model_name = (
+        context.app_config.models[0].name
+        if context.app_config and context.app_config.models
+        else None
+    )
     # 根据请求决定断开行为
     disconnect = (
         DisconnectMode.cancel
@@ -54,7 +59,7 @@ async def start_run(
             kwargs={},
             created_at=now,
             updated_at=now,
-            model_name="deepseek-v4-flash",
+            model_name=model_name,
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(e))
