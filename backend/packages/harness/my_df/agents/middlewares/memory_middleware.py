@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import AgentMiddleware, Runtime
+from langgraph.store.base import BaseStore
 
 from my_df.agents.memory.storage import (
     create_empty_memory,
@@ -33,7 +34,6 @@ from my_df.agents.middlewares._injection import (
     inject_block_into_first_human as _inject_into_first_human,
 )
 from my_df.config.memory_config import get_memory_config
-from langgraph.store.base import BaseStore
 from my_df.runtime.milvus.base import MilvusStorage
 
 if TYPE_CHECKING:
