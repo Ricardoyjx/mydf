@@ -24,16 +24,23 @@ from collections.abc import AsyncIterator
 from langgraph.store.base import BaseStore
 
 from my_df.config.app_config import AppConfig, get_app_config
-
-# from my_df.runtime.store.provider import (
-#     POSTGRES_CONN_REQUIRED,
-#     POSTGRES_STORE_INSTALL,
-#     SQLITE_STORE_INSTALL,
-#     ensure_sqlite_parent_dir,
-#     resolve_sqlite_conn_str,
-# )
+from my_df.runtime.store._sqlite_utils import (
+    ensure_sqlite_parent_dir,
+    resolve_sqlite_conn_str,
+)
 
 logger = logging.getLogger(__name__)
+
+SQLITE_STORE_INSTALL = (
+    "langgraph-checkpoint-sqlite is required for the SQLite store. "
+    "Install it with: uv add langgraph-checkpoint-sqlite"
+)
+POSTGRES_STORE_INSTALL = (
+    "langgraph-checkpoint-postgres is required for the PostgreSQL store."
+)
+POSTGRES_CONN_REQUIRED = (
+    "checkpointer.connection_string is required for the postgres store backend"
+)
 
 # ---------------------------------------------------------------------------
 # Internal backend factory
@@ -54,45 +61,37 @@ async def _async_store(config) -> AsyncIterator[BaseStore]:
         yield InMemoryStore()
         return
 
-    # 非 memory 后端暂未启用 SQLite/Postgres Store，统一回退到 InMemoryStore
-    if config.type in ("sqlite", "postgres"):
-        from langgraph.store.memory import InMemoryStore
+    if config.type == "sqlite":
+        try:
+            from langgraph.store.sqlite.aio import AsyncSqliteStore
+        except ImportError as exc:
+            raise ImportError(SQLITE_STORE_INSTALL) from exc
 
-        logger.info("Store: %s 后端暂未启用，使用 InMemoryStore 回退", config.type)
-        yield InMemoryStore()
+        conn_str = resolve_sqlite_conn_str(config.connection_string or "store.db")
+        ensure_sqlite_parent_dir(conn_str)
+
+        async with AsyncSqliteStore.from_conn_string(conn_str) as store:
+            await store.setup()
+            logger.info("Store: using AsyncSqliteStore (%s)", conn_str)
+            yield store
         return
 
-    # if config.type == "sqlite":
-    #     try:
-    #         from langgraph.store.sqlite.aio import AsyncSqliteStore
-    #     except ImportError as exc:
-    #         raise ImportError(SQLITE_STORE_INSTALL) from exc
+    if config.type == "postgres":
+        try:
+            from langgraph.store.postgres.aio import AsyncPostgresStore
+        except ImportError as exc:
+            raise ImportError(POSTGRES_STORE_INSTALL) from exc
 
-    #     conn_str = resolve_sqlite_conn_str(config.connection_string or "store.db")
-    #     ensure_sqlite_parent_dir(conn_str)
+        if not config.connection_string:
+            raise ValueError(POSTGRES_CONN_REQUIRED)
 
-    #     async with AsyncSqliteStore.from_conn_string(conn_str) as store:
-    #         await store.setup()
-    #         logger.info("Store: using AsyncSqliteStore (%s)", conn_str)
-    #         yield store
-    #     return
-
-    # if config.type == "postgres":
-    #     try:
-    #         from langgraph.store.postgres.aio import AsyncPostgresStore  # type: ignore[import]
-    #     except ImportError as exc:
-    #         raise ImportError(POSTGRES_STORE_INSTALL) from exc
-
-    #     if not config.connection_string:
-    #         raise ValueError(POSTGRES_CONN_REQUIRED)
-
-    #     async with AsyncPostgresStore.from_conn_string(
-    #         config.connection_string
-    #     ) as store:
-    #         await store.setup()
-    #         logger.info("Store: using AsyncPostgresStore")
-    #         yield store
-    #     return
+        async with AsyncPostgresStore.from_conn_string(
+            config.connection_string
+        ) as store:
+            await store.setup()
+            logger.info("Store: using AsyncPostgresStore")
+            yield store
+        return
 
     raise ValueError(f"Unknown store backend type: {config.type!r}")
 
