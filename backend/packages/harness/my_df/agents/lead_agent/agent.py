@@ -7,6 +7,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain.tools import BaseTool
 from langchain_core.runnables import RunnableConfig
+from langgraph.store.base import BaseStore
 
 from my_df.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
 from my_df.agents.middlewares.memory_middleware import MemoryMiddleware
@@ -39,6 +40,7 @@ def _build_middlewares(
     custom_middlewares: list[AgentMiddleware] | None = None,
     *,
     app_config: AppConfig | None = None,
+    store: BaseStore | None = None,
     milvus: MilvusStorage | None = None,
     embedding_model: Any | None = None,
 ):
@@ -72,6 +74,7 @@ def _build_middlewares(
         MemoryMiddleware(
             agent_name=agent_name,
             user_id=user_id,
+            store=store,
             milvus=milvus,
             embedding_model=embedding_model,
         )
@@ -180,6 +183,7 @@ def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
 
 def make_lead_agent(
     config: RunnableConfig,
+    store: BaseStore | None = None,
     milvus: MilvusStorage | None = None,
     embedding_model: Any | None = None,
 ):
@@ -189,6 +193,7 @@ def make_lead_agent(
     return _make_lead_agent(
         config,
         app_config=runtime_app_config or get_app_config(),
+        store=store,
         milvus=milvus,
         embedding_model=embedding_model,
     )
@@ -198,6 +203,7 @@ def _make_lead_agent(
     config: RunnableConfig,
     *,
     app_config: AppConfig,
+    store: BaseStore | None = None,
     milvus: MilvusStorage | None = None,
     embedding_model: Any | None = None,
 ):
@@ -226,6 +232,7 @@ def _make_lead_agent(
             model_name=app_config.models[0].name if app_config.models else None,
             agent_name=agent_name,
             app_config=app_config,
+            store=store,
             milvus=milvus,
             embedding_model=embedding_model,
         ),

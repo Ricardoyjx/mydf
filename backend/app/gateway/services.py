@@ -73,6 +73,7 @@ async def start_run(
         agent_config["configurable"]["assistant_id"] = body.assistant_id
     agent_factory = make_lead_agent(
         agent_config,
+        store=context.store,
         milvus=getattr(request.app.state, "milvus", None),
         embedding_model=getattr(request.app.state, "embedding_model", None),
     )  # type: ignore

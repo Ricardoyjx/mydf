@@ -1,5 +1,5 @@
-from fastapi import APIRouter
-from my_df.agents.memory.updater import get_memory_data
+from fastapi import APIRouter, HTTPException, Request
+from my_df.agents.memory.updater import get_memory_data_async
 from my_df.runtime.user_context import get_effective_user_id
 from pydantic import BaseModel, Field
 
@@ -43,8 +43,12 @@ class MemoryResponse(BaseModel):
     summary="Get memory Data",
     description="Get memory Data",
 )
-async def get_memory() -> MemoryResponse:
-    """Get the current global memory data.
+async def get_memory(request: Request) -> MemoryResponse:
+    """Get the current user's memory data from LangGraph Store.
+
+    与 MemoryMiddleware 共用 Store（namespace=("user", user_id)）中的数据，
+    保证 API 与对话记忆读写一致。``thread_id`` 仅保留路径兼容，
+    记忆按用户（user_id）而非线程隔离。
 
     Returns:
         The current memory data with user context, history, and facts.
@@ -77,5 +81,8 @@ async def get_memory() -> MemoryResponse:
         }
         ```
     """
-    memory_data = get_memory_data(user_id=get_effective_user_id())
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Store not available")
+    memory_data = await get_memory_data_async(store, user_id=get_effective_user_id())
     return MemoryResponse(**memory_data)

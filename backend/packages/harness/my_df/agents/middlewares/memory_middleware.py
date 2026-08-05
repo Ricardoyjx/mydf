@@ -21,13 +21,19 @@ from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import AgentMiddleware, Runtime
 
-from my_df.agents.memory.storage import get_memory_storage, utc_now_iso_z
+from my_df.agents.memory.storage import (
+    create_empty_memory,
+    get_memory_storage,
+    utc_now_iso_z,
+)
 from my_df.agents.middlewares._injection import (
     get_latest_human_text as _get_latest_user_text,
 )
 from my_df.agents.middlewares._injection import (
     inject_block_into_first_human as _inject_into_first_human,
 )
+from my_df.config.memory_config import get_memory_config
+from langgraph.store.base import BaseStore
 from my_df.runtime.milvus.base import MilvusStorage
 
 if TYPE_CHECKING:
@@ -237,20 +243,51 @@ class MemoryMiddleware(AgentMiddleware):
         self,
         agent_name: str | None = None,
         user_id: str = "default",
+        store: BaseStore | None = None,
         milvus: MilvusStorage | None = None,
         embedding_model: Any | None = None,
     ) -> None:
         self._agent_name = (agent_name or "").replace("_", "-") or None
         self._user_id = user_id
-        self._storage = get_memory_storage()
+        self._store = store  # LangGraph BaseStore（可选，优先使用）
+        if store is None:
+            self._storage = get_memory_storage()  # 回退：JSON 文件存储
         self._milvus = milvus  # Milvus 向量存储实例（可选）
         self._embedding = embedding_model  # Embedding 模型（可选）
         logger.info(
-            "MemoryMiddleware 初始化: agent=%s, user=%s, milvus=%s",
+            "MemoryMiddleware 初始化: agent=%s, user=%s, store=%s, milvus=%s",
             agent_name,
             user_id,
+            "yes" if store is not None else "no",
             "yes" if milvus else "no",
         )
+
+    # ── 记忆存储（Store 优先，回退 JSON 文件）────────────────────────────
+
+    @staticmethod
+    def _memory_key(agent_name: str | None) -> str:
+        """Store 中记忆记录的 key：按 agent 区分，缺省为 "default"。"""
+        return (agent_name or "").replace("_", "-") or "default"
+
+    async def _load_memory(self) -> dict[str, Any]:
+        """加载记忆：优先 Store（namespace=("user", user_id)），回退文件存储。"""
+        if self._store is not None:
+            item = await self._store.aget(
+                ("user", self._user_id), self._memory_key(self._agent_name)
+            )
+            return item.value if item is not None else create_empty_memory()
+        return self._storage.load(agent_name=self._agent_name, user_id=self._user_id)
+
+    async def _save_memory(self, memory: dict[str, Any]) -> None:
+        """保存记忆：优先写入 Store，回退文件存储。"""
+        if self._store is not None:
+            await self._store.aput(
+                ("user", self._user_id),
+                self._memory_key(self._agent_name),
+                memory,
+            )
+            return
+        self._storage.save(memory, agent_name=self._agent_name, user_id=self._user_id)
 
     # ── property ──────────────────────────────────────────────────────────
 
@@ -265,10 +302,10 @@ class MemoryMiddleware(AgentMiddleware):
         state: AgentState,
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
-        """异步 hook：JSON 记忆注入 + Milvus 语义检索 + 合并注入。
+        """异步 hook：持久化记忆注入 + Milvus 语义检索 + 合并注入。
 
         步骤：
-        1. 从 FileMemoryStorage 加载持久化记忆 → 格式化为 <memory_context> 块
+        1. 从 Store / 文件存储加载持久化记忆 → 格式化为 <memory_context> 块
         2. 用 Embedding 模型对用户最新消息编码 → Milvus search → 格式化为 <semantic_memory> 块
         3. 合并两个块注入到首条 HumanMessage
         """
@@ -282,12 +319,10 @@ class MemoryMiddleware(AgentMiddleware):
         if not messages:
             return None
 
-        # — 第 1 步：JSON 文件记忆 —
+        # — 第 1 步：加载持久化记忆（Store 优先，回退 JSON 文件） —
         block_parts: list[str] = []
         try:
-            memory = self._storage.load(
-                agent_name=self._agent_name, user_id=self._user_id
-            )
+            memory = await self._load_memory()
             if memory and _has_content(memory):
                 block_parts.append(_format_memory_block(memory))
         except Exception as e:  # noqa: BLE001
@@ -342,15 +377,13 @@ class MemoryMiddleware(AgentMiddleware):
             return {"messages": result}
         return None
 
-    def _save_json_memory(self, messages: list[Any]) -> dict[str, Any] | None:
-        """将最近对话写入 JSON memory 存储（同步）。"""
+    async def _save_json_memory(self, messages: list[Any]) -> dict[str, Any] | None:
+        """将最近对话写入记忆存储（Store 优先，回退 JSON 文件）。"""
         if not messages:
             return None
 
         try:
-            memory = self._storage.load(
-                agent_name=self._agent_name, user_id=self._user_id
-            )
+            memory = await self._load_memory()
             if not memory:
                 return None
 
@@ -362,7 +395,7 @@ class MemoryMiddleware(AgentMiddleware):
                 "updatedAt": utc_now_iso_z(),
             }
 
-            max_facts = getattr(get_memory_storage(), "max_facts", 100)
+            max_facts = get_memory_config().max_facts
             new_facts = _extract_facts(messages, max_facts)
             existing_facts = memory.get("facts", [])
             existing_ids = {f["id"] for f in existing_facts}
@@ -373,9 +406,7 @@ class MemoryMiddleware(AgentMiddleware):
 
             memory["lastUpdated"] = utc_now_iso_z()
 
-            self._storage.save(
-                memory, agent_name=self._agent_name, user_id=self._user_id
-            )
+            await self._save_memory(memory)
             logger.debug(
                 "memory 已回写 (user=%s), facts=%d", self._user_id, len(new_facts)
             )
@@ -396,10 +427,10 @@ class MemoryMiddleware(AgentMiddleware):
         state: AgentState,
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
-        """异步 hook：先执行同步回写，再尝试 Milvus 向量存储。"""
-        # 1. 先执行同步回写（JSON 存储）
+        """异步 hook：先回写记忆，再尝试 Milvus 向量存储。"""
+        # 1. 回写记忆（Store 优先，回退 JSON 文件）
         messages = state.get("messages")
-        sync_result = self._save_json_memory(messages)
+        sync_result = await self._save_json_memory(messages)
 
         # 2. 将对话摘要向量化并存入 Milvus
         if self._milvus is not None:
