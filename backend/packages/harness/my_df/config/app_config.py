@@ -85,11 +85,23 @@ def _build_checkpointer_config() -> CheckpointerConfig | None:
     """从环境变量构建 checkpointer 配置。"""
     raw = os.getenv(ENV_CHECKPOINTER_TYPE)
     if raw not in ("memory", "sqlite", "postgres"):
+        if raw:
+            logger.warning(
+                "MYDF_CHECKPOINTER_TYPE=%s 无效，回退为 InMemorySaver", raw
+            )
         return None  # 未配置或值无效，使用 InMemorySaver
+
+    conn_str = os.getenv(ENV_CHECKPOINTER_PATH)
+    if raw == "postgres" and not conn_str:
+        logger.warning(
+            "MYDF_CHECKPOINTER_TYPE=postgres 但未配置 MYDF_CHECKPOINTER_PATH，"
+            "回退为 InMemorySaver（重启后对话历史将丢失）"
+        )
+        return None
+
     return CheckpointerConfig(
         type=cast("CheckpointerType", raw),
-        connection_string=os.getenv(ENV_CHECKPOINTER_PATH)
-        or ".deer-flow/checkpoints.db",
+        connection_string=conn_str or ".deer-flow/checkpoints.db",
     )
 
 

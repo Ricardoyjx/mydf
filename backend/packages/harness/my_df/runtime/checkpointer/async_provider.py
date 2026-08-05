@@ -45,13 +45,6 @@ def _prepare_sqlite_checkpointer_path(raw: str) -> str:
     return conn_str
 
 
-def _prepare_database_sqlite_checkpointer_path(db_config) -> str:
-    """从 database 配置段提取 SQLite 路径并确保父目录存在。"""
-    conn_str = db_config.checkpointer_sqlite_path
-    ensure_sqlite_parent_dir(conn_str)
-    return conn_str
-
-
 # ---------------------------------------------------------------------------
 # Async factory
 # ---------------------------------------------------------------------------
@@ -101,53 +94,6 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
     raise ValueError(f"Unknown checkpointer type: {config.type!r}")
 
 
-# ---------------------------------------------------------------------------
-# Public async context manager
-# ---------------------------------------------------------------------------
-
-
-@contextlib.asynccontextmanager
-async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpointer]:
-    """Async context manager that constructs a checkpointer from unified DatabaseConfig."""
-    if db_config.backend == "memory":
-        from langgraph.checkpoint.memory import InMemorySaver
-
-        yield InMemorySaver()
-        return
-
-    if db_config.backend == "sqlite":
-        try:
-            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-        except ImportError as exc:
-            raise ImportError(SQLITE_INSTALL) from exc
-
-        conn_str = await asyncio.to_thread(
-            _prepare_database_sqlite_checkpointer_path, db_config
-        )
-        async with AsyncSqliteSaver.from_conn_string(conn_str) as saver:
-            await saver.setup()
-            yield saver
-        return
-
-    if db_config.backend == "postgres":
-        try:
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-        except ImportError as exc:
-            raise ImportError(POSTGRES_INSTALL) from exc
-
-        if not db_config.postgres_url:
-            raise ValueError(
-                "database.postgres_url is required for the postgres backend"
-            )
-
-        async with AsyncPostgresSaver.from_conn_string(db_config.postgres_url) as saver:
-            await saver.setup()
-            yield saver
-        return
-
-    raise ValueError(f"Unknown database backend: {db_config.backend!r}")
-
-
 @contextlib.asynccontextmanager
 async def make_checkpointer(
     app_config: AppConfig | None = None,
@@ -158,12 +104,11 @@ async def make_checkpointer(
         async with make_checkpointer(app_config) as checkpointer:
             app.state.checkpointer = checkpointer
 
-    Yields an ``InMemorySaver`` when no checkpointer is configured in *config.yaml*.
+    Yields an ``InMemorySaver`` when no checkpointer is configured.
 
-    Priority:
-    1. Legacy ``checkpointer:`` config section (backward compatible)
-    2. Unified ``database:`` config section
-    3. Default InMemorySaver
+    配置优先级：
+    1. ``checkpointer`` 配置段（memory / sqlite / postgres）
+    2. 未配置时回退 InMemorySaver
     """
 
     if app_config is None:
@@ -172,13 +117,6 @@ async def make_checkpointer(
     # Legacy: standalone checkpointer config takes precedence
     if app_config.checkpointer is not None:
         async with _async_checkpointer(app_config.checkpointer) as saver:
-            yield saver
-            return
-
-    # Unified database config
-    db_config = getattr(app_config, "database", None)
-    if db_config is not None and db_config.backend != "memory":
-        async with _async_checkpointer_from_database(db_config) as saver:
             yield saver
             return
 
