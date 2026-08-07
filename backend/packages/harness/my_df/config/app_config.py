@@ -13,6 +13,7 @@ from my_df.config.checkpointer_config import CheckpointerConfig, CheckpointerTyp
 from my_df.config.embedding_config import EmbeddingConfig
 from my_df.config.milvus_config import MilvusConfig, load_milvus_config_from_env
 from my_df.config.model_config import ModelConfig
+from my_df.config.rerank_config import RerankConfig, load_rerank_config_from_env
 from my_df.config.stream_bridge_config import StreamBridgeConfig
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,11 @@ class AppConfig(BaseModel):
         description="Embedding 模型配置",
     )
 
+    reranker: RerankConfig = Field(
+        default_factory=RerankConfig,
+        description="Rerank 模型配置",
+    )
+
 
 def _build_default_model_config() -> ModelConfig | None:
     """从环境变量构建默认模型配置。
@@ -86,9 +92,7 @@ def _build_checkpointer_config() -> CheckpointerConfig | None:
     raw = os.getenv(ENV_CHECKPOINTER_TYPE)
     if raw not in ("memory", "sqlite", "postgres"):
         if raw:
-            logger.warning(
-                "MYDF_CHECKPOINTER_TYPE=%s 无效，回退为 InMemorySaver", raw
-            )
+            logger.warning("MYDF_CHECKPOINTER_TYPE=%s 无效，回退为 InMemorySaver", raw)
         return None  # 未配置或值无效，使用 InMemorySaver
 
     conn_str = os.getenv(ENV_CHECKPOINTER_PATH)
@@ -138,6 +142,7 @@ def get_app_config() -> AppConfig:
         is_plan_mode=is_plan_mode,
         embedding=load_embedding_config_from_env(),
         milvus=load_milvus_config_from_env(),
+        reranker=load_rerank_config_from_env(),
     )
 
     logger.info(

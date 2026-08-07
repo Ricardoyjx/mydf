@@ -109,8 +109,8 @@ async def _finalize_run(
         return
     try:
         status = task.result()
-    except Exception as e:  # noqa: BLE001
-        logger.error("运行 %s 异常退出: %s", record.run_id, e, exc_info=True)
+    except Exception as e:
+        logger.error("运行 %s 异常退出: %s", record.run_id, e, exc_info=True)  # noqa: G201
         await run_mgr.update_status(record.run_id, RunStatus.error, error=str(e))
         return
     if isinstance(status, RunStatus):

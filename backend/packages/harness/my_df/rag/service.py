@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from my_df.rag.chunker import split_text
 from my_df.runtime.milvus.base import MilvusStorage, SearchResult
+from my_df.runtime.reranker.sentence import SentenceRerank
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class KnowledgeService:
         self,
         milvus: MilvusStorage,
         embedding: EmbeddingService,
+        reranker: SentenceRerank | None = None,
         *,
         agent_name: str | None = None,
         chunk_size: int = 800,
@@ -59,6 +61,7 @@ class KnowledgeService:
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
         self._content_type = content_type
+        self._rerank = reranker
 
     async def add_text(
         self,
@@ -139,13 +142,24 @@ class KnowledgeService:
         """对用户最新问题做语义检索，只返回知识库内容。"""
         await self._milvus.ensure_collection(user_id)
         query_vector = await self._embedding.encode(query)
-        return await self._milvus.search(
+
+        """粗召回tok——p * 4 数据"""
+        result = await self._milvus.search(
             user_id=user_id,
             query_vector=query_vector,
-            top_k=top_k,
+            top_k=top_k * 4,
             agent_name=agent_name,
             content_type=self._content_type,
         )
+
+        if self._rerank is not None:
+            scores = await self._rerank.reranker(query, [r.text for r in result])
+            ranked = sorted(zip(scores, result), key=lambda pair: pair[0], reverse=True)
+            result = [item for _, item in ranked]
+            for score, item in ranked:
+                item.score = score
+
+        return result[:top_k]
 
     async def list_documents(
         self,

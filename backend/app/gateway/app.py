@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from my_df.config.app_config import get_app_config
 from my_df.runtime.embeddings.sentence import SentenceEmbeddings
 from my_df.runtime.milvus.async_provider import make_milvus_storage
+from my_df.runtime.reranker.sentence import SentenceRerank
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 logger = logging.getLogger(__name__)
@@ -82,7 +83,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("Embedding 模型加载失败（向量检索不可用，其他功能正常）")
         app.state.embedding_model = None
 
-    # 5. 初始化 LangGraph 运行时（stream bridge、checkpointer 等）
+    # 5. 初始化 reranker 模型
+    try:
+        reranker = SentenceRerank(model_name=startup_config.reranker.model)
+        await reranker.load()
+        app.state.reranker = reranker
+        logger.info("Reranker 模型已就绪: model=%s", reranker._model_name)
+    except Exception:  # noqa: BLE001
+        """失败走降级处理"""
+        logger.warning("Reranker 模型加载失败（向量检索不可用，其他功能正常）")
+        app.state.reranker = None
+
+    # 6. 初始化 LangGraph 运行时（stream bridge、checkpointer 等）
     async with langgraph_runtime(app, startup_config):
         logger.info("LangGraph 运行时初始化完成")
 

@@ -54,12 +54,13 @@ def _get_knowledge_service(request: Request) -> KnowledgeService:
     """从 app.state 组装 RAG 服务；Milvus 或 Embedding 缺失时返回 503。"""
     milvus = getattr(request.app.state, "milvus", None)
     embedding = getattr(request.app.state, "embedding_model", None)
+    reranker = getattr(request.app.state, "reranker", None)
     if milvus is None or embedding is None:
         raise HTTPException(
             status_code=503,
             detail="RAG 不可用：Milvus 或 Embedding 模型未初始化",
         )
-    return KnowledgeService(milvus, embedding)
+    return KnowledgeService(milvus, embedding, reranker)
 
 
 @router.post("/documents", summary="文本方式入库文档")
