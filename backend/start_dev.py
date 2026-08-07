@@ -7,6 +7,9 @@ get_app_config() 首次调用时因 .env 未加载而丢失。
 import os
 from pathlib import Path
 
+# 屏蔽 tqdm 进度条输出（模型权重加载），子进程继承
+os.environ.setdefault("TQDM_DISABLE", "1")
+
 # 在导入任何业务模块之前加载 .env，使环境变量对子进程可见
 _env_path = Path(__file__).resolve().parent / ".env"
 if _env_path.exists():

@@ -1,5 +1,6 @@
 """FastAPI 网关入口：应用生命周期管理 + 路由注册。"""
 
+import asyncio
 import logging
 import os
 import time
@@ -39,6 +40,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         handler.setFormatter(_ColoredFormatter())
         logging.getLogger().addHandler(handler)
         logging.getLogger().setLevel(logging.INFO)
+
+    # 第三方库噪音日志降级：httpx / huggingface_hub 等仅保留 WARNING 以上
+    for _noisy_logger in (
+        "httpx",
+        "httpcore",
+        "huggingface_hub",
+        "filelock",
+        "urllib3",
+        "transformers",
+        "sentence_transformers",
+    ):
+        logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
+
+    # HF 未认证请求等常规提示一并屏蔽（真实错误仍以异常形式暴露）
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
+
+    # 禁用 tqdm 进度条输出（模型权重加载时的 Loading weights: ...）
+    os.environ.setdefault("TQDM_DISABLE", "1")
 
     # 1. 加载 .env 文件，使 DEEPSEEK_API_KEY 等环境变量可用
     env_path = _BACKEND_DIR / ".env"
@@ -83,15 +103,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("Embedding 模型加载失败（向量检索不可用，其他功能正常）")
         app.state.embedding_model = None
 
-    # 5. 初始化 reranker 模型
-    try:
-        reranker = SentenceRerank(model_name=startup_config.reranker.model)
-        await reranker.load()
-        app.state.reranker = reranker
-        logger.info("Reranker 模型已就绪: model=%s", reranker._model_name)
-    except Exception:  # noqa: BLE001
-        """失败走降级处理"""
-        logger.warning("Reranker 模型加载失败（向量检索不可用，其他功能正常）")
+    # 5. 初始化 reranker 模型（可选；需显式启用，下载超时自动降级）
+    if startup_config.reranker.enable:
+        try:
+            reranker = SentenceRerank(model_name=startup_config.reranker.model)
+            await asyncio.wait_for(reranker.load(), timeout=120)
+            app.state.reranker = reranker
+            logger.info("Reranker 模型已就绪: model=%s", reranker._model_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("Reranker 加载失败或超时（RAG 精排不可用，其他功能正常）")
+            app.state.reranker = None
+    else:
+        logger.info("Reranker 未启用（MYDF_RERANK_ENABLED=true 可开启精排）")
         app.state.reranker = None
 
     # 6. 初始化 LangGraph 运行时（stream bridge、checkpointer 等）
