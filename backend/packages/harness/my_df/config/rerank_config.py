@@ -8,8 +8,8 @@ class RerankConfig(BaseModel):
     )
 
     enable: bool = Field(
-        default=True,
-        description="是否启用 Rerank 模型。",
+        default=False,
+        description="是否启用 Rerank 模型（需显式配置 MYDF_RERANK_ENABLED=true）。",
     )
 
     candidate_k: int = Field(default=20, description="Rerank 模型使用的候选数量。")
@@ -22,4 +22,5 @@ def load_rerank_config_from_env() -> RerankConfig:
 
     return RerankConfig(
         model=os.getenv("MYDF_RERANK_MODEL", "BAAI/bge-reranker-base"),
+        enable=os.getenv("MYDF_RERANK_ENABLED", "false").lower() == "true",
     )

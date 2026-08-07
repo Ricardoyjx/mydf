@@ -23,7 +23,7 @@ class SentenceRerank:
     def _load_sync(self) -> Any:
         from sentence_transformers import CrossEncoder
 
-        logger.info("加载模型 %s", self._model_name)
+        logger.debug("加载模型 %s", self._model_name)
         device = "cuda" if torch.cuda.is_available() else "cpu"
         return CrossEncoder(self._model_name, device=device)
 

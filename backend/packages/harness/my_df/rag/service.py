@@ -8,9 +8,14 @@
 
 from __future__ import annotations
 
+import html
+import io
 import logging
+import re
 import uuid
+import zipfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from my_df.rag.chunker import split_text
@@ -18,6 +23,44 @@ from my_df.runtime.milvus.base import MilvusStorage, SearchResult
 from my_df.runtime.reranker.sentence import SentenceRerank
 
 logger = logging.getLogger(__name__)
+
+
+def extract_text_from_file(filename: str, raw: bytes) -> str:
+    """按文件扩展名提取纯文本。
+
+    - ``.docx``：解压 word/document.xml 并提取段落文本；
+    - 其他（.txt/.md/.json 等）：按 UTF-8 解码。
+
+    抛出：
+        ValueError: 文件类型不支持或 docx 解析失败。
+    """
+    ext = Path(filename).suffix.lower()
+    if ext == ".docx":
+        return _extract_docx_text(raw)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"不支持的文件类型 {ext!r}，或文件不是 UTF-8 文本") from exc
+
+
+def _extract_docx_text(raw: bytes) -> str:
+    """从 docx（zip 容器）中提取 word/document.xml 的纯文本。"""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8", errors="ignore")
+    except (zipfile.BadZipFile, KeyError) as exc:
+        raise ValueError(f"无法解析 docx 文件: {exc}") from exc
+
+    paragraphs = re.findall(r"<w:p(?: [^>]*)?>.*?</w:p>", xml, re.DOTALL)
+    lines: list[str] = []
+    for paragraph in paragraphs:
+        text = "".join(
+            re.findall(r"<w:t(?: [^>]*)?>(.*?)</w:t>", paragraph, re.DOTALL)
+        )
+        text = html.unescape(text).strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
 
 
 class EmbeddingService(Protocol):
@@ -137,9 +180,15 @@ class KnowledgeService:
         user_id: str,
         query: str,
         top_k: int = 5,
+        min_score: float | None = None,
         agent_name: str | None = None,
     ) -> list[SearchResult]:
-        """对用户最新问题做语义检索，只返回知识库内容。"""
+        """对用户最新问题做语义检索，只返回知识库内容。
+
+        参数：
+            min_score: 最低相似度阈值；低于该分的片段会被过滤。
+                       ``None`` 表示不过滤。
+        """
         await self._milvus.ensure_collection(user_id)
         query_vector = await self._embedding.encode(query)
 
@@ -159,6 +208,8 @@ class KnowledgeService:
             for score, item in ranked:
                 item.score = score
 
+        if min_score is not None:
+            result = [r for r in result if r.score >= min_score]
         return result[:top_k]
 
     async def list_documents(

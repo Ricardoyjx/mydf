@@ -33,7 +33,7 @@ class SentenceEmbeddings:
             None,
             self._load_sync,
         )
-        self._dim = self._model.get_sentence_embedding_dimension()
+        self._dim = self._model.get_embedding_dimension()
         logger.info(
             "SentenceTransformer 已加载: model=%s, dim=%d",
             self._model_name,
@@ -43,7 +43,7 @@ class SentenceEmbeddings:
     def _load_sync(self) -> Any:
         from sentence_transformers import SentenceTransformer
 
-        logger.info("正在加载 SentenceTransformer: %s ...", self._model_name)
+        logger.debug("正在加载 SentenceTransformer: %s ...", self._model_name)
         model = SentenceTransformer(self._model_name)
         return model
 
