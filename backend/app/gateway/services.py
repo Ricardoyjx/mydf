@@ -2,12 +2,12 @@
 
 import asyncio
 import json
+import logging
 import re
-import uuid
 from collections.abc import Mapping
-from datetime import datetime
 from typing import Any
 
+from app.gateway.deps import get_run_manager
 from fastapi import HTTPException, Request
 from langchain_core.runnables import RunnableConfig
 from my_df.agents.lead_agent.agent import make_lead_agent
@@ -15,6 +15,8 @@ from my_df.runtime.runs.manager import RunManager, RunRecord
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
 from my_df.runtime.runs.worker import RunContext, run_agent_mini
 from my_df.runtime.stream_bridge.base import StreamBridge, StreamEvent
+
+logger = logging.getLogger(__name__)
 
 
 async def start_run(
@@ -24,41 +26,31 @@ async def start_run(
     context: RunContext,
     bridge: StreamBridge,
 ) -> RunRecord:
-    """创建 RunRecord 并启动后台 agent 任务。
+    """通过 RunManager 注册运行记录并启动后台 agent 任务。
 
-    参数：
-        body:      验证后的请求体（类型标注为 Any 以避免与定义 Pydantic 模型的 router 模块产生循环导入）。
-        thread_id: 目标线程 ID。
-        request:   FastAPI 请求对象，用于从 ``app.state`` 获取单例。
+    状态流转：``pending -> running -> success / error / interrupted``；
+    终态由 task 完成回调统一收尾并同步持久化存储。
     """
-    # run_mgr = get_run_manager(request)  # 暂未启用持久化管理
-
-    now = datetime.now().isoformat()  # noqa: DTZ005
+    run_mgr = get_run_manager(request)
     model_name = (
         context.app_config.models[0].name
         if context.app_config and context.app_config.models
         else None
     )
-    # 根据请求决定断开行为
     disconnect = (
         DisconnectMode.cancel
         if body.on_disconnect == "cancel"
         else DisconnectMode.continue_
     )
-    run_id = str(uuid.uuid4())
 
     try:
-        record = RunRecord(
-            run_id=run_id,
+        record = await run_mgr.create(
             thread_id=thread_id,
             assistant_id=body.assistant_id,
-            status=RunStatus.pending,
             on_disconnect=disconnect,
-            multitask_strategy="rollback",
-            metadata={},
-            kwargs={},
-            created_at=now,
-            updated_at=now,
+            metadata=body.metadata or {},
+            kwargs=body.config or {},
+            multitask_strategy=body.multitask_strategy,
             model_name=model_name,
         )
     except Exception as e:  # noqa: BLE001
@@ -89,14 +81,40 @@ async def start_run(
             agent_factory=agent_factory,
             graph_input=graph_input,
             config=config,
-            run_id=run_id,
+            run_id=record.run_id,
             bridge=bridge,
             context=context,
         )
     )
 
     record.task = task
+    # 标记运行中；终态由 _finalize_run 回调统一收尾
+    await run_mgr.update_status(record.run_id, RunStatus.running)
+    task.add_done_callback(
+        lambda done: asyncio.create_task(_finalize_run(run_mgr, record, done))
+    )
     return record
+
+
+async def _finalize_run(
+    run_mgr: RunManager,
+    record: RunRecord,
+    task: asyncio.Task,
+) -> None:
+    """task 完成回调：把运行终态写入 RunManager 与持久化存储。"""
+    if task.cancelled():
+        await run_mgr.update_status(
+            record.run_id, RunStatus.interrupted, error="运行已被取消"
+        )
+        return
+    try:
+        status = task.result()
+    except Exception as e:  # noqa: BLE001
+        logger.error("运行 %s 异常退出: %s", record.run_id, e, exc_info=True)
+        await run_mgr.update_status(record.run_id, RunStatus.error, error=str(e))
+        return
+    if isinstance(status, RunStatus):
+        await run_mgr.update_status(record.run_id, status)
 
 
 # 流结束哨兵与心跳哨兵（与 stream_bridge/base.py 中的定义保持一致）

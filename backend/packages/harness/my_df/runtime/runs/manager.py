@@ -14,6 +14,15 @@ from my_df.runtime.runs.store.base import RunStore
 
 logger = logging.getLogger(__name__)
 
+_TERMINAL_STATUSES = frozenset(
+    {
+        RunStatus.success,
+        RunStatus.error,
+        RunStatus.timeout,
+        RunStatus.interrupted,
+    }
+)
+
 
 @dataclass
 class RunRecord:
@@ -121,7 +130,42 @@ class RunManager:
                 record.task.cancel()
             record.status = RunStatus.interrupted
             record.updated_at = datetime.now().isoformat()  # noqa: DTZ005
+            if self._store is not None:
+                try:
+                    await self._store.update_status(
+                        run_id, RunStatus.interrupted.value
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "持久化取消状态失败 (run_id=%s)", run_id, exc_info=True
+                    )
         logger.info("运行 %s 已取消（action=%s）", run_id, action)
+        return True
+
+    async def update_status(
+        self,
+        run_id: str,
+        status: RunStatus,
+        *,
+        error: str | None = None,
+    ) -> bool:
+        """更新运行状态并同步到持久化存储。
+
+        已处于终端状态（success/error/timeout/interrupted）的运行不再改变。
+        返回 True 表示更新成功；False 表示运行不存在或已处于终端状态。
+        """
+        async with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                return False
+            if record.status in _TERMINAL_STATUSES:
+                return False
+            record.status = status
+            record.error = error
+            record.updated_at = datetime.now().isoformat()  # noqa: DTZ005
+            if self._store is not None:
+                await self._store.update_status(run_id, status.value, error=error)
+        logger.info("运行 %s 状态更新为 %s", run_id, status.value)
         return True
 
     async def _call_store_with_retry(
@@ -183,14 +227,13 @@ class RunManager:
         metadata: dict | None = None,
         kwargs: dict | None = None,
         multitask_strategy: str = "reject",
+        model_name: str | None = None,
     ) -> RunRecord:
-        """以原子方式检查是否存在正在执行（inflight）的运行任务，并创建一个新的运行任务。
-        如果采用 reject（拒绝）策略，当该线程（thread）已存在待处理或正在运行的任务时，
-        将抛出 ConflictError 异常。如果采用 interrupt（中断）或 rollback（回滚）策略，
-        则会在创建新任务之前，先取消当前正在执行的任务。
-        此方法在执行“检查”和“插入”这两个操作时会持续持有锁，
-        从而消除了将 has_inflight（检查是否存在正在执行的任务）
-        与 create（创建任务）分开执行时可能出现的“检查与使用时的条件竞争”（TOCTOU race）问题
+        """创建一条运行记录并持久化到后备存储。
+
+        状态初始为 pending，后续由 :meth:`update_status` / :meth:`cancel`
+        驱动状态流转。``multitask_strategy`` 作为元数据记录，并发策略
+        （reject/rollback）由调用方按需基于 has_inflight 自行实现。
         """
         run_id = str(uuid.uuid4())
         now = datetime.now().isoformat()  # noqa: DTZ005
@@ -205,6 +248,7 @@ class RunManager:
             kwargs=kwargs or {},
             created_at=now,
             updated_at=now,
+            model_name=model_name,
         )
 
         async with self._lock:

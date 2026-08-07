@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from my_df.config.app_config import AppConfig
+from my_df.runtime.runs.schema import RunStatus
 from my_df.runtime.stream_bridge.base import StreamBridge
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ async def run_agent_mini(
     bridge: StreamBridge,
     run_id: str,
     context: RunContext,
-) -> None:
+) -> RunStatus:
     """简化版 Agent 运行器：遍历 astream 输出并处理每个 chunk。
 
     参数：
@@ -51,6 +52,10 @@ async def run_agent_mini(
         bridge:        流桥接器，用于发布事件。
         run_id:        当前运行 ID。
         context:       基础设施依赖（checkpointer、store 等）。
+
+    返回：
+        运行终态：``RunStatus.success`` / ``RunStatus.error`` /
+        ``RunStatus.interrupted``。
     """
     # 1. 注入 checkpointer（图编译后附着，模仿 LangGraph Platform 方案）
     if context.checkpointer is not None:
@@ -64,7 +69,7 @@ async def run_agent_mini(
             {"message": "请求体缺少 input 字段", "code": "MISSING_INPUT"},
         )
         await bridge.publish_end(run_id)
-        return
+        return RunStatus.error
 
     # 3. 遍历 astream，捕获所有异常
     try:
@@ -78,11 +83,13 @@ async def run_agent_mini(
                     "error",
                     {"message": f"处理事件时出错: {e}", "code": "CHUNK_ERROR"},
                 )
+        return RunStatus.success
     except asyncio.CancelledError:
         logger.info("Agent 运行被取消 (run_id=%s)", run_id)
         await bridge.publish(
             run_id, "error", {"message": "运行已被取消", "code": "CANCELLED"}
         )
+        return RunStatus.interrupted
     except Exception as e:
         logger.exception("Agent 运行失败 (run_id=%s)", run_id)
         await bridge.publish(
@@ -90,6 +97,7 @@ async def run_agent_mini(
             "error",
             {"message": f"Agent 执行出错: {e}", "code": "AGENT_ERROR"},
         )
+        return RunStatus.error
     finally:
         # 确保结束哨兵一定会发送，前端才能知道流已结束
         await bridge.publish_end(run_id)
