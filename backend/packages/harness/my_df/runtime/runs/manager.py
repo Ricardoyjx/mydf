@@ -160,6 +160,11 @@ class RunManager:
             offset=offset,
         )
 
+    async def delete_run(self, run_id: str) -> bool:
+        if self._store is None:
+            return False
+        return await self._store.delete(run_id)
+
     async def update_status(
         self,
         run_id: str,

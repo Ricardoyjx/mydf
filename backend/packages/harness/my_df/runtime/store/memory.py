@@ -79,7 +79,10 @@ class MemoryRunStore(RunStore):
             self._runs[run_id]["updated_at"] = datetime.now(UTC).isoformat()
 
     async def delete(self, run_id):
-        self._runs.pop(run_id, None)
+        if run_id is not None:
+            self._runs.pop(run_id, None)
+            return True
+        return True
 
     async def update_run_completion(self, run_id, *, status, **kwargs):
         if run_id in self._runs:

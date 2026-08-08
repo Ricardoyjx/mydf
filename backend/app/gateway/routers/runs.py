@@ -62,3 +62,14 @@ async def list_runs(
         offset=offset,
     )
     return {"runs": runs, "count": len(runs), "limit": limit, "offset": offset}
+
+
+@router.delete("/{runs_id}")
+async def delete_run(
+    runs_id: str,
+    request: Request,
+):
+    """删除运行记录。"""
+    run_mgr = get_run_manager(request)
+    await run_mgr.delete_run(runs_id)
+    return {"status": "ok"}

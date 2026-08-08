@@ -69,7 +69,7 @@ class RunStore(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def delete(self, run_id: str) -> None:
+    async def delete(self, run_id: str) -> bool:
         """删除运行记录。"""
 
     @abc.abstractmethod
