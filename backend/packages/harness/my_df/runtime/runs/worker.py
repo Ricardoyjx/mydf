@@ -92,7 +92,9 @@ async def run_agent(
             role = m.get("role") if isinstance(m, dict) else getattr(m, "type", "")
             if role in ("human", "user"):
                 content = (
-                    m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
+                    m.get("content")
+                    if isinstance(m, dict)
+                    else getattr(m, "content", "")
                 )
                 if content:
                     stats.first_human_message = str(content)[:2000]
