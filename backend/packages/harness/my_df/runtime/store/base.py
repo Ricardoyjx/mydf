@@ -137,5 +137,13 @@ class RunStore(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def list(*, user_id, status, limit, offset) -> list[dict[str, Any]]:
-        """列出指定状态的运行"""
+    async def list(
+        self,
+        *,
+        user_id: str | None = None,
+        status: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """通用运行列表：按用户 / 状态 / 线程过滤，创建时间倒序分页。"""

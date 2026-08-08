@@ -152,5 +152,22 @@ class MemoryRunStore(RunStore):
             },
         }
 
-    async def list(self, *, user_id, status, limit, offset):
-        return
+    async def list(
+        self,
+        *,
+        user_id: str | None = None,
+        status: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ):
+        result = [
+            r
+            for r in self._runs.values()
+            if (user_id is None or r.get("user_id") == user_id)
+            and (status is None or r.get("status") == status)
+            and (thread_id is None or r.get("thread_id") == thread_id)
+        ]
+
+        result.sort(key=lambda r: r["created_at"], reverse=True)
+        return result[offset : offset + limit]

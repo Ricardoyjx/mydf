@@ -140,6 +140,26 @@ class RunManager:
         logger.info("运行 %s 已取消（action=%s）", run_id, action)
         return True
 
+    async def list_runs(
+        self,
+        *,
+        user_id: str | None = None,
+        status: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """查询运行记录列表（代理到后备 RunStore，未配置时返回空列表）。"""
+        if self._store is None:
+            return []
+        return await self._store.list(
+            user_id=user_id,
+            status=status,
+            thread_id=thread_id,
+            limit=limit,
+            offset=offset,
+        )
+
     async def update_status(
         self,
         run_id: str,

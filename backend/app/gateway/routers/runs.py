@@ -5,7 +5,7 @@ import uuid
 from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
 from app.gateway.routers.thread_runs import RunCreateRequest
 from app.gateway.services import see_consumer, start_run
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -43,6 +43,22 @@ async def stateless_stream(
     )
 
 
-@router.get("?status=&thread_id=&limit=&offset=")
-async def list():
-    return
+@router.get("", summary="获取运行列表")
+async def list_runs(
+    request: Request,
+    user_id: str | None = Query(default=None, description="用户ID"),
+    status: str | None = Query(default=None, description="运行状态"),
+    thread_id: str | None = Query(default=None, description="主题ID"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """列出运行记录，支持按用户/状态/线程过滤与分页。"""
+    run_mgr = get_run_manager(request)
+    runs = await run_mgr.list_runs(
+        user_id=user_id,
+        status=status,
+        thread_id=thread_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {"runs": runs, "count": len(runs), "limit": limit, "offset": offset}
