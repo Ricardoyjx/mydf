@@ -96,6 +96,128 @@ def _format_memory_block(memory: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ── 事实提取与合并策略 ─────────────────────────────────────────────
+
+# 非事实黑名单：疑问词 / 请求词 / 观点句开头
+_QUESTION_WORDS = (
+    "谁",
+    "啥",
+    "什么",
+    "怎么",
+    "如何",
+    "为什么",
+    "哪",
+    "吗",
+    "呢",
+    "几号",
+    "多少",
+    "哪个",
+    "哪里",
+    "哪种",
+)
+_COMMAND_WORDS = ("请", "描述一下", "介绍一下", "介绍", "告诉", "帮我", "说明")
+_OPINION_PREFIXES = ("我认为", "我觉得", "我想说", "我感觉", "我不认为", "我不是说")
+
+
+def _is_fact_candidate(content: str) -> bool:
+    """过滤疑问句、请求句、观点句，只保留客观的自我陈述。"""
+    text = (content or "").strip()
+    if not text:
+        return False
+    if any(w in text for w in _QUESTION_WORDS):
+        return False
+    if any(w in text for w in _COMMAND_WORDS):
+        return False
+    return not text.startswith(_OPINION_PREFIXES)
+
+
+def normalize_fact_text(text: str) -> str:
+    """归一化事实文本：去掉空白与常见标点，用于去重比较。"""
+    return re.sub(r"[\s\u3000，。！？、,.;:：!！?？\"'“”‘’]", "", str(text))
+
+
+def merge_facts(
+    existing: list[dict[str, Any]],
+    new_facts: list[dict[str, Any]],
+    max_facts: int = 100,
+) -> list[dict[str, Any]]:
+    """合并事实：归一化去重 + 身份类覆盖（后说为准）。
+
+    规则：
+    1. 归一化后文本完全相同 → 跳过；
+    2. 一条是另一条的子串 → 保留更完整的那条（新更完整则替换）；
+    3. ``category == "identity"`` 只保留最新一条（新身份覆盖旧身份）；
+    4. 其余类别（preference / attribute）只做去重，可并存。
+    """
+    # 存量内：identity 只保留最后一条，其余类别原样保留
+    identity_fact: dict[str, Any] | None = None
+    base: list[dict[str, Any]] = []
+    for fact in existing:
+        if fact.get("category") == "identity":
+            identity_fact = fact
+        else:
+            base.append(fact)
+    if identity_fact is not None:
+        base.append(identity_fact)
+
+    def _dedup(fact: dict[str, Any]) -> bool:
+        """与 merged 比较，返回是否已存在重复（相等或包含）。"""
+        nonlocal merged
+        norm = normalize_fact_text(fact.get("content", ""))
+        if not norm:
+            return True
+        dup_index: int | None = None
+        replace_dup = False
+        for i, old in enumerate(merged):
+            old_norm = normalize_fact_text(old.get("content", ""))
+            if not old_norm:
+                continue
+            if norm == old_norm or norm in old_norm:
+                dup_index = i
+                replace_dup = False
+                break
+            if old_norm in norm:
+                dup_index = i
+                replace_dup = True
+                break
+        if dup_index is not None:
+            if replace_dup:
+                # 新事实更完整 → 替换旧事实
+                merged[dup_index] = fact
+            return True
+        return False
+
+    # 存量内归一化去重（更完整者胜出）
+    merged: list[dict[str, Any]] = []
+    for fact in base:
+        if not _dedup(fact):
+            merged.append(fact)
+
+    for fact in new_facts:
+        norm = normalize_fact_text(fact.get("content", ""))
+        if not norm:
+            continue
+
+        # 身份类：后说为准，先清掉所有旧 identity
+        if fact.get("category") == "identity":
+            merged = [m for m in merged if m.get("category") != "identity"]
+
+        if _dedup(fact):
+            continue
+
+        merged.append(fact)
+
+    return merged[:max_facts]
+
+
+def clean_facts(
+    facts: list[dict[str, Any]], max_facts: int = 100
+) -> list[dict[str, Any]]:
+    """只读清洗存量事实：过滤非事实 + 去重 + 身份覆盖。"""
+    valid = [f for f in facts if _is_fact_candidate(f.get("content", ""))]
+    return merge_facts(valid, [], max_facts)
+
+
 def _extract_conversation_summary(messages: list[Any], max_turns: int = 20) -> str:
     """从对话记录中提取 user ↔ assistant 交换摘要。
 
@@ -182,7 +304,11 @@ def _extract_facts(
             "identity",
             0.9,
         ),
-        (r"我(?:喜欢|热爱|钟情|偏爱)\s*(.+?)(?:[。，；!！?？]|$)", "preference", 0.8),
+        (
+            r"我(?:喜欢|热爱|爱|钟情|偏爱)\s*(.+?)(?:[。，；!！?？]|$)",
+            "preference",
+            0.8,
+        ),
         (r"我(?:想|要|希望|想要|打算)\s*(.+?)(?:[。，；!！?？]|$)", "preference", 0.6),
         (r"我(?:是|做|从事)\s*(.+?)(?:[。，；!！?？]|$)", "attribute", 0.6),
         (r"我有\s*(.+?)(?:[。，；!！?？]|$)", "attribute", 0.5),
@@ -194,6 +320,8 @@ def _extract_facts(
         for match in re.finditer(pattern, cleaned):
             content = match.group(0).strip()
             if not content or content in seen:
+                continue
+            if not _is_fact_candidate(content):
                 continue
             seen.add(content)
 
@@ -324,6 +452,12 @@ class MemoryMiddleware(AgentMiddleware):
         try:
             memory = await self._load_memory()
             if memory and _has_content(memory):
+                # 注入前先清洗事实：过滤非事实 + 去重 + 身份覆盖
+                stored_facts = memory.get("facts") or []
+                if stored_facts:
+                    memory["facts"] = clean_facts(
+                        stored_facts, get_memory_config().max_facts
+                    )
                 block_parts.append(_format_memory_block(memory))
         except Exception as e:  # noqa: BLE001
             logger.warning("读取 memory 失败: %s", e)
@@ -398,11 +532,7 @@ class MemoryMiddleware(AgentMiddleware):
             max_facts = get_memory_config().max_facts
             new_facts = _extract_facts(messages, max_facts)
             existing_facts = memory.get("facts", [])
-            existing_ids = {f["id"] for f in existing_facts}
-            for f in new_facts:
-                if f["id"] not in existing_ids:
-                    existing_facts.append(f)
-            memory["facts"] = existing_facts[:max_facts]
+            memory["facts"] = merge_facts(existing_facts, new_facts, max_facts)
 
             memory["lastUpdated"] = utc_now_iso_z()
 

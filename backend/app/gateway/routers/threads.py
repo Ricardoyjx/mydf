@@ -49,7 +49,9 @@ async def get_thread_messages(thread_id: str, request: Request):
     # 清洗 content：去掉中间件注入的系统标签
     _SYSTEM_BLOCKS_RE = re.compile(
         r"<system-reminder>.*?</system-reminder>|"
-        r"<memory_context>.*?</memory_context>",
+        r"<memory_context>.*?</memory_context>|"
+        r"<semantic_memory>.*?</semantic_memory>|"
+        r"<rag_context>.*?</rag_context>",
         re.DOTALL,
     )
 

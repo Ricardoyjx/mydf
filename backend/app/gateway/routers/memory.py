@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from my_df.agents.memory.updater import get_memory_data_async
+from my_df.agents.middlewares.memory_middleware import clean_facts
 from my_df.runtime.user_context import get_effective_user_id
 from pydantic import BaseModel, Field
 
@@ -85,4 +86,8 @@ async def get_memory(request: Request) -> MemoryResponse:
     if store is None:
         raise HTTPException(status_code=503, detail="Store not available")
     memory_data = await get_memory_data_async(store, user_id=get_effective_user_id())
+    # 只读清洗存量事实：过滤非事实 + 去重 + 身份覆盖（不写回存储）
+    existing_facts = memory_data.get("facts") or []
+    if existing_facts:
+        memory_data["facts"] = clean_facts(existing_facts)
     return MemoryResponse(**memory_data)
