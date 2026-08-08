@@ -41,3 +41,8 @@ async def stateless_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@router.get("?status=&thread_id=&limit=&offset=")
+async def list():
+    return

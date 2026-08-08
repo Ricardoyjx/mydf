@@ -135,3 +135,7 @@ class RunStore(abc.ABC):
         total_tokens, total_input_tokens, total_output_tokens, total_runs,
         by_model（model_name → {tokens, runs}）, by_caller（lead_agent/subagent/middleware）。
         """
+
+    @abc.abstractmethod
+    async def list(*, user_id, status, limit, offset) -> list[dict[str, Any]]:
+        """列出指定状态的运行"""

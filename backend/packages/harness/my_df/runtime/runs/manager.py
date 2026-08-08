@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
-from my_df.runtime.runs.store.base import RunStore
+from my_df.runtime.store.base import RunStore
 
 logger = logging.getLogger(__name__)
 
@@ -132,10 +132,8 @@ class RunManager:
             record.updated_at = datetime.now().isoformat()  # noqa: DTZ005
             if self._store is not None:
                 try:
-                    await self._store.update_status(
-                        run_id, RunStatus.interrupted.value
-                    )
-                except Exception:  # noqa: BLE001
+                    await self._store.update_status(run_id, RunStatus.interrupted.value)
+                except Exception:
                     logger.warning(
                         "持久化取消状态失败 (run_id=%s)", run_id, exc_info=True
                     )
