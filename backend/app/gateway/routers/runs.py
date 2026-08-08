@@ -5,7 +5,7 @@ import uuid
 from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
 from app.gateway.routers.thread_runs import RunCreateRequest
 from app.gateway.services import see_consumer, start_run
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -73,3 +73,12 @@ async def delete_run(
     run_mgr = get_run_manager(request)
     await run_mgr.delete_run(runs_id)
     return {"status": "ok"}
+
+
+@router.post("/{run_id}/cancel")
+async def cancel(run_id: str, request: Request):
+    run_mgr = get_run_manager(request)
+    ok = await run_mgr.cancel(run_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="运行不存在或已结束")
+    return {"run_id": run_id, "status": "interrupted"}
