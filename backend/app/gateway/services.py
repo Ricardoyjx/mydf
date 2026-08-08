@@ -13,7 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from my_df.agents.lead_agent.agent import make_lead_agent
 from my_df.runtime.runs.manager import RunManager, RunRecord
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
-from my_df.runtime.runs.worker import RunContext, run_agent_mini
+from my_df.runtime.runs.worker import RunContext, run_agent
 from my_df.runtime.stream_bridge.base import StreamBridge, StreamEvent
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ async def start_run(
         assistant_id=body.assistant_id,
     )
     task = asyncio.create_task(
-        run_agent_mini(
+        run_agent(
             agent_factory=agent_factory,
             graph_input=graph_input,
             config=config,
@@ -108,13 +108,21 @@ async def _finalize_run(
         )
         return
     try:
-        status = task.result()
+        result = task.result()
     except Exception as e:
         logger.error("运行 %s 异常退出: %s", record.run_id, e, exc_info=True)  # noqa: G201
         await run_mgr.update_status(record.run_id, RunStatus.error, error=str(e))
         return
+    if isinstance(result, tuple) and len(result) == 2:
+        status, stats = result
+    else:
+        status, stats = result, None
     if isinstance(status, RunStatus):
         await run_mgr.update_status(record.run_id, status)
+        if stats is not None:
+            await run_mgr.update_run_completion(
+                record.run_id, status=status, stats=stats
+            )
 
 
 # 流结束哨兵与心跳哨兵（与 stream_bridge/base.py 中的定义保持一致）

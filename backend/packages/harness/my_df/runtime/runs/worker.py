@@ -35,14 +35,28 @@ class RunContext:
     app_config: AppConfig | None = field(default=None)
 
 
-async def run_agent_mini(
+class RunStats:
+    """
+    运行代理的统计信息。
+    """
+
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_tokens: int = 0
+    llm_call_count: int = 0
+    message_count: int = 0
+    last_ai_message: str | None = None
+    first_human_message: str | None = None
+
+
+async def run_agent(
     agent_factory: Any,
     graph_input: dict | None,
     config: dict,
     bridge: StreamBridge,
     run_id: str,
     context: RunContext,
-) -> RunStatus:
+) -> tuple[RunStatus, RunStats]:
     """简化版 Agent 运行器：遍历 astream 输出并处理每个 chunk。
 
     参数：
@@ -57,6 +71,8 @@ async def run_agent_mini(
         运行终态：``RunStatus.success`` / ``RunStatus.error`` /
         ``RunStatus.interrupted``。
     """
+    stats = RunStats()
+
     # 1. 注入 checkpointer（图编译后附着，模仿 LangGraph Platform 方案）
     if context.checkpointer is not None:
         agent_factory.checkpointer = context.checkpointer
@@ -69,13 +85,24 @@ async def run_agent_mini(
             {"message": "请求体缺少 input 字段", "code": "MISSING_INPUT"},
         )
         await bridge.publish_end(run_id)
-        return RunStatus.error
+        return RunStatus.error, stats
+
+    if graph_input and graph_input.get("messages"):
+        for m in graph_input["messages"]:
+            role = m.get("role") if isinstance(m, dict) else getattr(m, "type", "")
+            if role in ("human", "user"):
+                content = (
+                    m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
+                )
+                if content:
+                    stats.first_human_message = str(content)[:2000]
+                break
 
     # 3. 遍历 astream，捕获所有异常
     try:
         async for chunk in agent_factory.astream(graph_input, config=config):
             try:
-                await process_chunk(bridge, run_id, chunk)
+                await process_chunk(bridge, run_id, chunk, stats)
             except Exception as e:
                 logger.exception("处理 chunk 时出错 (run_id=%s)", run_id)
                 await bridge.publish(
@@ -83,13 +110,13 @@ async def run_agent_mini(
                     "error",
                     {"message": f"处理事件时出错: {e}", "code": "CHUNK_ERROR"},
                 )
-        return RunStatus.success
+        return RunStatus.success, stats
     except asyncio.CancelledError:
         logger.info("Agent 运行被取消 (run_id=%s)", run_id)
         await bridge.publish(
             run_id, "error", {"message": "运行已被取消", "code": "CANCELLED"}
         )
-        return RunStatus.interrupted
+        return RunStatus.interrupted, stats
     except Exception as e:
         logger.exception("Agent 运行失败 (run_id=%s)", run_id)
         await bridge.publish(
@@ -97,13 +124,15 @@ async def run_agent_mini(
             "error",
             {"message": f"Agent 执行出错: {e}", "code": "AGENT_ERROR"},
         )
-        return RunStatus.error
+        return RunStatus.error, stats
     finally:
         # 确保结束哨兵一定会发送，前端才能知道流已结束
         await bridge.publish_end(run_id)
 
 
-async def process_chunk(bridge: StreamBridge, run_id: str, chunk: dict):
+async def process_chunk(
+    bridge: StreamBridge, run_id: str, chunk: dict, stats: RunStats
+):
     """处理单个 agent 输出 chunk。
 
     astream stream_mode="updates" 格式为 ``{node_name: output}``。
@@ -123,9 +152,18 @@ async def process_chunk(bridge: StreamBridge, run_id: str, chunk: dict):
                 continue
 
             last = messages[-1]
+
+            usage = getattr(last, "usage_metadata", None) or {}
+            stats.total_input_tokens += int(usage.get("input_tokens") or 0)
+            stats.total_output_tokens += int(usage.get("output_tokens") or 0)
+            stats.total_tokens += int(usage.get("total_tokens") or 0)
+            stats.llm_call_count += 1
+            stats.message_count = len(messages)
+
             # 优先 .content 属性
             text = getattr(last, "content", None)
             if text:
+                stats.last_ai_message = str(text)[:2000]
                 await bridge.publish(run_id, "updates", str(text))
                 logger.debug("published from %s: %s", node_name, str(text)[:80])
                 return

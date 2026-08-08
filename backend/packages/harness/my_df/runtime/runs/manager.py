@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
+from my_df.runtime.runs.worker import RunStats
 from my_df.runtime.store.base import RunStore
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,16 @@ class RunManager:
             return False
         return await self._store.delete(run_id)
 
+    async def aggregate_tokens_by_thread(
+        self, thread_id: str, *, include_active: bool = False
+    ) -> dict[str, Any]:
+        """聚合指定线程的 token 用量（代理到后备 RunStore）。"""
+        if self._store is None:
+            return {}
+        return await self._store.aggregate_tokens_by_thread(
+            thread_id, include_active=include_active
+        )
+
     async def update_status(
         self,
         run_id: str,
@@ -293,6 +304,27 @@ class RunManager:
                     self._runs.pop(run_id, None)
         logger.info("Run created: run_id=%s thread_id=%s", run_id, thread_id)
         return record
+
+    async def update_run_completion(
+        self, run_id: str, *, status: RunStatus, stats: RunStats
+    ) -> bool:
+        """把运行终态与 token 统计写入后备 RunStore。"""
+        if self._store is None:
+            return False
+
+        result = await self._store.update_run_completion(
+            run_id,
+            status=status.value,
+            total_input_tokens=stats.total_input_tokens,
+            total_output_tokens=stats.total_output_tokens,
+            total_tokens=stats.total_tokens,
+            llm_call_count=stats.llm_call_count,
+            message_count=stats.message_count,
+            last_ai_message=stats.last_ai_message,
+            first_human_message=stats.first_human_message,
+        )
+
+        return result is True
 
 
 _RETRYABLE_SQLITE_ERROR_CODES = {

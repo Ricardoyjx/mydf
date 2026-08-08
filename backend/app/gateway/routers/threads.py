@@ -3,14 +3,43 @@
 import logging
 import re
 
-from app.gateway.deps import get_checkpointer
-from fastapi import APIRouter, HTTPException, Request
+from app.gateway.deps import get_checkpointer, get_run_manager
+from fastapi import APIRouter, HTTPException, Query, Request
 from langchain_core.messages import message_to_dict
 from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
+
+
+@router.get("/{thread_id}/runs")
+async def list_thread_runs(
+    thread_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """获取指定线程的运行历史（创建时间倒序）。"""
+    run_mgr = get_run_manager(request)
+    runs = await run_mgr.list_runs(
+        thread_id=thread_id, limit=limit, offset=offset
+    )
+    return {"thread_id": thread_id, "runs": runs, "count": len(runs)}
+
+
+@router.get("/{thread_id}/runs/usage")
+async def get_thread_runs_usage(
+    thread_id: str,
+    request: Request,
+    include_active: bool = Query(default=False),
+):
+    """聚合指定线程已完成运行的 token 用量。"""
+    run_mgr = get_run_manager(request)
+    usage = await run_mgr.aggregate_tokens_by_thread(
+        thread_id, include_active=include_active
+    )
+    return {"thread_id": thread_id, "usage": usage}
 
 
 @router.get("/{thread_id}/messages")
