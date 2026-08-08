@@ -271,6 +271,29 @@ body::before{
   vertical-align:text-bottom;
   animation:blink-cursor .75s step-end infinite;
 }
+.msg-bubble .md-code{
+  background:var(--bg-base);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  padding:.6rem .8rem;
+  overflow-x:auto;
+  font-family:var(--font-mono);
+  font-size:.82rem;
+  margin:.4rem 0;
+  white-space:pre-wrap;
+}
+.msg-bubble code.md-inline{
+  background:var(--bg-base);
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:0 .3em;
+  font-family:var(--font-mono);
+  font-size:.85em;
+}
+.msg-bubble strong{font-weight:650}
+.msg-bubble .md-h{margin:.5rem 0 .2rem}
+.msg-bubble .md-li{margin-left:1.2rem}
+.msg-bubble a{color:var(--accent)}
 @keyframes blink-cursor{50%{opacity:0}}
 
 /* ── SSE 事件日志（调试用） ── */
@@ -884,7 +907,7 @@ async function loadHistory() {
     for (const msg of (data.messages || [])) {
       const role = msg.role === 'human' ? 'user' : msg.role === 'ai' ? 'assistant' : msg.role;
       if (role === 'user' || role === 'assistant') {
-        addMessage(role, msg.content, { id: msg.id });
+        addMessage(role, msg.content, { id: msg.id, markdown: role === 'assistant' });
       }
     }
     setStatus(data.messages.length + ' 条消息', 'var(--green)');
@@ -935,7 +958,12 @@ function addMessage(role, text, opts = {}) {
 
   const contentSpan = document.createElement('span');
   contentSpan.className = 'stream-content';
-  contentSpan.textContent = text || '';
+  if (opts.markdown) {
+    contentSpan.dataset.markdown = '1';
+    contentSpan.innerHTML = renderMarkdown(text || '');
+  } else {
+    contentSpan.textContent = text || '';
+  }
   bubble.appendChild(contentSpan);
 
   // 光标（仅 assistant 流式输出时显示）
@@ -967,7 +995,7 @@ async function sendMessage(userText) {
   addMessage('user', userText);
 
   // 创建 assistant 占位
-  const contentSpan = addMessage('assistant', '', { showCursor: true });
+  const contentSpan = addMessage('assistant', '', { showCursor: true, markdown: true });
 
   const threadId = threadIdEl.value.trim() || genId();
   if (!threadIdEl.value.trim()) threadIdEl.value = threadId;
@@ -1041,6 +1069,10 @@ async function sendMessage(userText) {
     // 移除光标
     const cursor = contentSpan.parentElement?.querySelector('.stream-cursor');
     cursor?.remove();
+    // 流式结束：把 Markdown 渲染成富文本
+    if (contentSpan.dataset.markdown) {
+      contentSpan.innerHTML = renderMarkdown(contentSpan.textContent);
+    }
     // 恢复 UI
     inputEl.disabled = false;
     sendBtn.disabled = false;
@@ -1179,6 +1211,37 @@ function esc(s) {
   const d = document.createElement('div');
   d.textContent = String(s ?? '');
   return d.innerHTML;
+}
+
+// 轻量 Markdown 渲染：先转义再替换标记，仅支持常用语法，防 XSS
+function renderMarkdown(text) {
+  if (!text) return '';
+  const blocks = [];
+  let html = esc(text);
+  // 代码块 / 行内代码先占位，避免内部标记被后续规则误伤
+  html = html.replace(/```([\s\S]*?)```/g, (_, code) => {
+    blocks.push('<pre class="md-code"><code>' + code.replace(/^\n+|\n+$/g, '') + '</code></pre>');
+    return '\u0001' + (blocks.length - 1) + '\u0001';
+  });
+  html = html.replace(/`([^`\n]+)`/g, (_, code) => {
+    blocks.push('<code class="md-inline">' + code + '</code>');
+    return '\u0001' + (blocks.length - 1) + '\u0001';
+  });
+  // 链接 / 加粗 / 斜体
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  // 标题 / 列表
+  html = html.replace(/^### (.+)$/gm, '<h4 class="md-h">$1</h4>');
+  html = html.replace(/^## (.+)$/gm, '<h3 class="md-h">$1</h3>');
+  html = html.replace(/^# (.+)$/gm, '<h2 class="md-h">$1</h2>');
+  html = html.replace(/^\s*[-*] (.+)$/gm, '<li class="md-li">$1</li>');
+  html = html.replace(/^\s*\d+\. (.+)$/gm, '<li class="md-li">$1</li>');
+  // 段落与换行
+  html = html.replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>');
+  // 还原代码占位
+  html = html.replace(/\u0001(\d+)\u0001/g, (_, i) => blocks[+i] || '');
+  return '<p>' + html + '</p>';
 }
 
 // =============================================================
@@ -1324,17 +1387,17 @@ async function loadMemory() {
     const parts = [];
     if (userSec.length) {
       parts.push('<div class="memory-section"><h4>用户上下文</h4>' +
-        userSec.map(([label, s]) => `<div class="memory-item"><span class="mem-label">${label}：</span>${esc(s)}</div>`).join('') +
+        userSec.map(([label, s]) => `<div class="memory-item"><span class="mem-label">${label}：</span>${renderMarkdown(s)}</div>`).join('') +
         '</div>');
     }
     if (histSec.length) {
       parts.push('<div class="memory-section"><h4>历史上下文</h4>' +
-        histSec.map(([label, s]) => `<div class="memory-item"><span class="mem-label">${label}：</span>${esc(s)}</div>`).join('') +
+        histSec.map(([label, s]) => `<div class="memory-item"><span class="mem-label">${label}：</span>${renderMarkdown(s)}</div>`).join('') +
         '</div>');
     }
     if ((data.facts || []).length) {
       parts.push('<div class="memory-section"><h4>已提取事实</h4>' +
-        data.facts.map((f) => `<div class="memory-item">${esc(f.content)}</div>`).join('') +
+        data.facts.map((f) => `<div class="memory-item">${renderMarkdown(f.content)}</div>`).join('') +
         '</div>');
     }
     if (!parts.length) {
