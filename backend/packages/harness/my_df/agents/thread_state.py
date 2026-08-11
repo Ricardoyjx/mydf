@@ -1,5 +1,6 @@
 """线程状态类型定义：LangGraph Agent 的核心 State schema。"""
 
+import operator
 from typing import Annotated, NotRequired, TypedDict
 
 from langchain.agents import AgentState
@@ -82,3 +83,12 @@ class ThreadState(AgentState):
     viewed_images: Annotated[
         dict[str, ViewedImageData], merge_viewed_images
     ]  # image_path -> {base64, mime_type}
+    iteration_count: Annotated[int, operator.add]  # 每次循环节点 +1
+    last_error: NotRequired[str | None]  # 记录最近错误，供条件边判断是否重试
+    next: NotRequired[
+        str | None
+    ]  # supervisor 路由目标（子代理名）；None/缺失 → 直接回答
+    route_count: Annotated[int, operator.add]  # 委派/评审轮次计数，防止 supervisor 循环
+    last_task: NotRequired[str | None]  # 最近一次委派的任务描述（供 reflect 评审）
+    reflection_passed: NotRequired[bool | None]  # 最近一次质量评审是否通过
+    reflection_feedback: NotRequired[str | None]  # 评审意见（不通过原因）
