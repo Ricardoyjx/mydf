@@ -40,13 +40,45 @@ class RunStats:
     运行代理的统计信息。
     """
 
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    total_tokens: int = 0
-    llm_call_count: int = 0
-    message_count: int = 0
-    last_ai_message: str | None = None
-    first_human_message: str | None = None
+    # total_input_tokens: int = 0
+    # total_output_tokens: int = 0
+    # total_tokens: int = 0
+    # llm_call_count: int = 0
+    # message_count: int = 0
+    # last_ai_message: str | None = None
+    # first_human_message: str | None = None
+
+    def __init__(self) -> None:
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_tokens: int = 0
+        self.lead_agent_tokens: int = 0  # supervisor/reflect 顶层 LLM 调用 token
+        self.subagent_tokens: int = 0  # 子代理 LLM 调用 token
+        self.llm_call_count: int = 0
+        self.message_count: int = 0
+        self.last_ai_message: str | None = None
+        self.first_human_message: str | None = None
+        # 已发布消息 id 集合：嵌套 chunk 中同一消息会多次出现，需要去重
+        self._published_message_ids: set[str] = set()
+
+
+def _iter_message_payloads(payload: Any):
+    """递归遍历 chunk 输出，产出其中所有 ``messages`` 列表。
+
+    Supervisor 图 astream(updates) 顶层为 ``{节点名: 输出}``；子代理作为
+    子图节点时输出会嵌套（如 ``{"sub_agent": {"model": {"messages": [...]}}}``），
+    因此需要递归提取。
+    """
+    if isinstance(payload, dict):
+        messages = payload.get("messages")
+        if messages:
+            yield messages
+        for key, value in payload.items():
+            if key != "messages":
+                yield from _iter_message_payloads(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            yield from _iter_message_payloads(item)
 
 
 async def run_agent(
@@ -138,45 +170,100 @@ async def process_chunk(
     """处理单个 agent 输出 chunk。
 
     astream stream_mode="updates" 格式为 ``{node_name: output}``。
-    只关注名为 ``"model"`` 的节点（真正的 LLM 调用输出），
-    跳过中间件注入（MemoryMiddleware、DynamicContextMiddleware）。
+     顶层节点 ``sub_agent`` 的 token 计入子代理分账，其余（model_call/reflect）
+      计入 lead_agent 分账；
+    - 递归提取嵌套消息（子代理子图输出会嵌套）；
+    - 按消息 id 去重，同一消息在累积 messages 中多次出现时只推送一次。
     """
+
+    # try:
+    #     for node_name, output in chunk.items():
+    #         # 只处理 model 节点的输出（真正的 AI 回复）
+    #         if node_name != "model":
+    #             continue
+    #         if not isinstance(output, dict):
+    #             continue
+
+    #         messages = output.get("messages")
+    #         if not messages or len(messages) == 0:
+    #             continue
+
+    #         last = messages[-1]
+
+    #         usage = getattr(last, "usage_metadata", None) or {}
+    #         stats.total_input_tokens += int(usage.get("input_tokens") or 0)
+    #         stats.total_output_tokens += int(usage.get("output_tokens") or 0)
+    #         stats.total_tokens += int(usage.get("total_tokens") or 0)
+    #         stats.llm_call_count += 1
+    #         stats.message_count = len(messages)
+
+    #         # 优先 .content 属性
+    #         text = getattr(last, "content", None)
+    #         if text:
+    #             stats.last_ai_message = str(text)[:2000]
+    #             await bridge.publish(run_id, "updates", str(text))
+    #             logger.debug("published from %s: %s", node_name, str(text)[:80])
+    #             return
+    #         # 回退：str() 后正则提取
+    #         raw = str(last)
+    #         m = re.search(r"content='([^']*)'", raw)
+    #         if m:
+    #             await bridge.publish(run_id, "updates", m.group(1))
+    #             return
+    #         # 最终回退：发原始字符串
+    #         await bridge.publish(run_id, "updates", raw[:200])
+    # except Exception as e:
+    #     logger.error("process_chunk error: %s", e, exc_info=True)  # noqa: G201
+    #     await bridge.publish(run_id, "error", {"message": f"process_chunk: {e}"})
+
     try:
         for node_name, output in chunk.items():
-            # 只处理 model 节点的输出（真正的 AI 回复）
-            if node_name != "model":
-                continue
-            if not isinstance(output, dict):
-                continue
+            bucket = "subagent" if node_name == "subagent" else "lead"
+            for messages in _iter_message_payloads(output):
+                if not messages:
+                    continue
+                last = messages[-1]
+                # 只统计ai消息
+                if getattr(last, "type", "") != "ai":
+                    continue
 
-            messages = output.get("messages")
-            if not messages or len(messages) == 0:
-                continue
+                msg_id = getattr(last, "id", None)
+                if msg_id and msg_id in stats._published_message_ids:
+                    continue
+                if msg_id:
+                    stats._published_message_ids.add(msg_id)
+                usage = getattr(last, "usage_metadata", None) or {}
+                input_tokens = int(usage.get("input_tokens") or 0)
+                output_tokens = int(usage.get("output_tokens") or 0)
+                total_tokens = int(usage.get("total_tokens") or 0)
+                stats.total_input_tokens += input_tokens
+                stats.total_output_tokens += output_tokens
+                stats.total_tokens += total_tokens
+                if bucket == "subagent":
+                    stats.subagent_tokens += total_tokens
+                else:
+                    stats.lead_agent_tokens += total_tokens
+                stats.llm_call_count += 1
+                stats.message_count = len(messages)
 
-            last = messages[-1]
-
-            usage = getattr(last, "usage_metadata", None) or {}
-            stats.total_input_tokens += int(usage.get("input_tokens") or 0)
-            stats.total_output_tokens += int(usage.get("output_tokens") or 0)
-            stats.total_tokens += int(usage.get("total_tokens") or 0)
-            stats.llm_call_count += 1
-            stats.message_count = len(messages)
-
-            # 优先 .content 属性
-            text = getattr(last, "content", None)
-            if text:
-                stats.last_ai_message = str(text)[:2000]
-                await bridge.publish(run_id, "updates", str(text))
-                logger.debug("published from %s: %s", node_name, str(text)[:80])
-                return
-            # 回退：str() 后正则提取
-            raw = str(last)
-            m = re.search(r"content='([^']*)'", raw)
-            if m:
-                await bridge.publish(run_id, "updates", m.group(1))
-                return
-            # 最终回退：发原始字符串
-            await bridge.publish(run_id, "updates", raw[:200])
+                # 优先 .content 属性
+                text = getattr(last, "content", None)
+                if text:
+                    stats.last_ai_message = str(text)[:2000]
+                    await bridge.publish(run_id, "updates", str(text))
+                    logger.debug("published from %s: %s", node_name, str(text)[:80])
+                    continue
+                # supervisor 的 route_to_agent 工具调用消息无正文，仅统计不推送
+                if getattr(last, "tool_calls", None):
+                    continue
+                # 回退：str() 后正则提取
+                raw = str(last)
+                m = re.search(r"content='([^']*)'", raw)
+                if m:
+                    await bridge.publish(run_id, "updates", m.group(1))
+                    continue
+                # 最终回退：发原始字符串
+                await bridge.publish(run_id, "updates", raw[:200])
     except Exception as e:
         logger.error("process_chunk error: %s", e, exc_info=True)  # noqa: G201
         await bridge.publish(run_id, "error", {"message": f"process_chunk: {e}"})
