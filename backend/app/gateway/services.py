@@ -9,8 +9,8 @@ from typing import Any
 
 from app.gateway.deps import get_run_manager
 from fastapi import HTTPException, Request
-from langchain_core.runnables import RunnableConfig
-from my_df.agents.lead_agent.agent import make_lead_agent
+from my_df.agents.supervisor_graph import build_supervisor_graph
+from my_df.config.app_config import get_app_config
 from my_df.runtime.runs.manager import RunManager, RunRecord
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
 from my_df.runtime.runs.worker import RunContext, run_agent
@@ -56,19 +56,32 @@ async def start_run(
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(e))
 
-    # 构造 agent 配置并启动后台运行
-    agent_config: RunnableConfig = {
-        "recursion_limit": 100,
-        "configurable": {"user_id": "default"},
-    }
-    if body.assistant_id:
-        agent_config["configurable"]["assistant_id"] = body.assistant_id
-    agent_factory = make_lead_agent(
-        agent_config,
+    # # 构造 agent 配置并启动后台运行
+    # agent_config: RunnableConfig = {
+    #     "recursion_limit": 100,
+    #     "configurable": {"user_id": "default"},
+    # }
+    # if body.assistant_id:
+    #     agent_config["configurable"]["assistant_id"] = body.assistant_id
+    # agent_factory = make_lead_agent(
+    #     agent_config,
+    #     store=context.store,
+    #     milvus=getattr(request.app.state, "milvus", None),
+    #     embedding_model=getattr(request.app.state, "embedding_model", None),
+    # )  # type: ignore
+
+    # 构造 Supervisor 编排图（Lead Agent / Sub Agent 架构）
+    app_config = context.app_config or get_app_config()
+    agent_factory = build_supervisor_graph(
+        app_config,
         store=context.store,
-        milvus=getattr(request.app.state, "milvus", None),
+        milvus=getattr(
+            request.app.state,
+            "milvus",
+            None,
+        ),
         embedding_model=getattr(request.app.state, "embedding_model", None),
-    )  # type: ignore
+    )
     graph_input = body.input
     config = build_run_config(
         thread_id=thread_id,
