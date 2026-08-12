@@ -22,6 +22,7 @@ class SentenceEmbeddings:
         self._model_name = model_name
         self._model: Any = None
         self._dim: int = 0
+        self._load_lock = asyncio.Lock()  # 懒加载并发安全锁
 
     async def load(self) -> None:
         """加载模型（耗时较长，需在 lifespan 中调用一次）。"""
@@ -40,6 +41,18 @@ class SentenceEmbeddings:
             self._dim,
         )
 
+    async def ensure_loaded(self, timeout: float = 120) -> None:
+        """懒加载入口：首次调用时加载模型（并发安全，避免重复加载）。
+
+        加载失败或超时抛异常，由调用方降级处理（如跳过语义检索）。
+        """
+        if self._model is not None:
+            return
+        async with self._load_lock:
+            if self._model is not None:
+                return
+            await asyncio.wait_for(self.load(), timeout=timeout)
+
     def _load_sync(self) -> Any:
         from sentence_transformers import SentenceTransformer
 
@@ -54,9 +67,7 @@ class SentenceEmbeddings:
 
     async def encode(self, text: str) -> list[float]:
         """将单段文本编码为向量。"""
-        if self._model is None:
-            raise RuntimeError("Embedding 模型未加载，请先调用 load()")
-
+        await self.ensure_loaded()
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, self._encode_sync, text)
         return result
@@ -66,9 +77,7 @@ class SentenceEmbeddings:
 
     async def encode_batch(self, texts: list[str]) -> list[list[float]]:
         """批量编码多段文本（内部使用 GPU/批处理优化）。"""
-        if self._model is None:
-            raise RuntimeError("Embedding 模型未加载，请先调用 load()")
-
+        await self.ensure_loaded()
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, self._encode_batch_sync, texts)
         return result

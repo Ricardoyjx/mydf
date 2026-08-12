@@ -92,23 +92,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("Milvus 未就绪（向量存储不可用，其他功能正常）")
         app.state.milvus = None
 
-    # 4. 初始化本地 Embedding 模型（可选，失败不影响应用启动）
-    try:
-        embedder = SentenceEmbeddings(model_name=startup_config.embedding.model)
-        await embedder.load()
-        app.state.embedding_model = embedder
-        logger.info(
-            "Embedding 模型已就绪: model=%s, dim=%d", embedder._model_name, embedder.dim
-        )
-    except Exception:  # noqa: BLE001
-        logger.warning("Embedding 模型加载失败（向量检索不可用，其他功能正常）")
-        app.state.embedding_model = None
+    # 4. 注册 Embedding 模型（懒加载：启动不占内存，首次检索/入库时加载）
+    app.state.embedding_model = SentenceEmbeddings(
+        model_name=startup_config.embedding.model
+    )
+    logger.info(
+        "Embedding 已注册（懒加载，首次检索时加载）: model=%s",
+        startup_config.embedding.model,
+    )
 
     # 5. 注册 reranker 模型（懒加载：启动不占内存，首次搜索时加载）
     if startup_config.reranker.enable:
-        app.state.reranker = SentenceRerank(
-            model_name=startup_config.reranker.model
-        )
+        app.state.reranker = SentenceRerank(model_name=startup_config.reranker.model)
         logger.info(
             "Reranker 已注册（懒加载，首次搜索时加载）: model=%s",
             app.state.reranker._model_name,
@@ -132,7 +127,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 event_store=app.state.event_store,
             )
             logger.info("Multi-Agent Supervisor 图已预热，请求时将复用该实例")
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Supervisor 图预热失败，请求时将按需构建")
             app.state.agent_factory = None
 
