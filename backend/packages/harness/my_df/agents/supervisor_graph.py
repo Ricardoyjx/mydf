@@ -17,7 +17,13 @@ from typing import Any
 
 from langchain.tools import BaseTool, tool
 from langchain_core.language_models import BaseChatModel, LanguageModelInput
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+)
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import START, CompiledStateGraph, StateNode
@@ -116,15 +122,28 @@ def _make_model_call_node(
     async def model_call_node(
         state: ThreadState, config: RunnableConfig
     ) -> dict[str, Any]:
-        # cfg = _get_runtime_config(config)
-        # user_id = state.get("user_id", "default")
-        # runtime = Runtime(store=store)
-
-        # 注入知识库rag 上下文
-
         messages = state.get("messages") or []
+
+        call_messages: list[AnyMessage] = [SystemMessage(content=system_prompt)]
+
+        # 注入质量评审反馈：让supervisor在重新编排时知道上一轮为何被驳回
+        feedback = state.get("reflection_feedback")
+        if feedback:
+            call_messages.append(
+                SystemMessage(
+                    content=(
+                        "<reflection_feedback>"
+                        "上一轮输出未通过质量评审,请据此重新委派或直接补答"
+                        f"评审意见：{feedback}"
+                        "</refleciton_feedback>"
+                    )
+                )
+            )
+
+        call_messages.extend(messages)
+
         response = await model.ainvoke(
-            [SystemMessage(content=system_prompt), *messages],
+            call_messages,
             config=config,
         )
 
@@ -139,22 +158,37 @@ def _make_supervisor_router(
     """构建 supervisor 纯函数节点：解析 route_to_agent 调用，写 next / last_task。"""
 
     def supervisor_router_node(state: ThreadState) -> dict[str, Any]:
-        target: str | None
-        task: str | None
+        target: str | None = None
+        task: str | None = None
+        route_message_ids: list[str] = []
         for msg in reversed(state.get("messages", [])):
             for call in getattr(msg, "tool_calls", None) or []:
                 if call.get("name") == "route_to_agent":
                     args = call.get("args", {})
                     target = args.get("agent_name")
                     task = args.get("task")
+                    msg_id = getattr(msg, "id", None)
+                    if msg_id:
+                        route_message_ids.append(msg_id)
                     break
             if target:
                 break
+
+        update: dict[str, Any] = {"next": None}
+        # 移除 supervisor 带 tool_calls 的 AIMessage：该工具仅用于声明委派意图、
+        # 不真正执行，若残留会导致后续模型调用因“tool_calls 无对应 ToolMessage”
+        # 被 API 拒绝（400 invalid_request_error）。
+        if route_message_ids:
+            update["messages"] = [
+                RemoveMessage(id=msg_id) for msg_id in route_message_ids
+            ]
+
         if target and target in registry:
-            return {"next": target, "task": task}
+            update.update({"next": target, "last_task": task})
+            return update
         if target:
-            logger.warning(f"Agent {target} not found")
-        return {"next": None}
+            logger.warning("Agent %s not found", target)
+        return update
 
     return supervisor_router_node
 
@@ -348,18 +382,33 @@ def build_supervisor_graph(
     +"""
 
     supervisor_model = create_chat_model(
-        name=None, think_enable=False, app_config=app_config, attach_tracing=False
+        name=None, thinking_enable=False, app_config=app_config, attach_tracing=False
     ).bind_tools([route_to_agent])
 
     review_model = create_chat_model(
-        name=None, think_enable=False, app_config=app_config, attach_tracing=False
+        name=None, thinking_enable=False, app_config=app_config, attach_tracing=False
     )
 
     registry = _build_default_registry(app_config, tools)
     registry_desc = "\n".join(
         f"-{name}: {cfg.description}" for name, (cfg, _) in registry.items()
     )
-    system_prompt = SUPERVISOR_SYSTEM_PROMPT.format(registry_desc)
+    model_name = app_config.models[0].name if app_config.models else "unknown"
+    subagent_lines = "\n".join(
+        f"    - {name}: model={cfg.model}, max_turns={cfg.max_turns}, "
+        f"timeout={cfg.timeout_seconds}s, tools={cfg.tools or 'all'}"
+        for name, (cfg, _) in registry.items()
+    )
+    logger.info(
+        "构建 Multi-Agent Supervisor 图: supervisor_model=%s, llm_review=%s, "
+        "max_routes=%d, subagents=%d\n%s",
+        model_name,
+        enable_llm_review,
+        max_routes,
+        len(registry),
+        subagent_lines,
+    )
+    system_prompt = SUPERVISOR_SYSTEM_PROMPT.format(registry_desc=registry_desc)
 
     builder = StateGraph(ThreadState)
     builder.add_node(
@@ -392,8 +441,14 @@ def build_supervisor_graph(
     builder.add_edge("subagent", "reflect")
     builder.add_conditional_edges(
         "reflect",
-        _make_route_after_reflection(MAX_ROUTES),
-        {END: END},
+        _make_route_after_reflection(max_routes),
+        {"model_call": "model_call", END: END},
     )
 
-    return builder.compile()
+    graph = builder.compile()
+    logger.info(
+        "Multi-Agent Supervisor 图构建完成: nodes=model_call/supervisor/subagent/reflect, "
+        "subagents=%d, recursion_limit 由运行时 config 控制",
+        len(registry),
+    )
+    return graph
