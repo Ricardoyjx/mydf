@@ -52,6 +52,25 @@ When you complete the task, provide:
 )
 
 
+def filter_tools(
+    all_tools: list[BaseTool],
+    allowed_tools: list[str] | None,
+    disallowed_tools: list[str] | None,
+) -> list[BaseTool]:
+    """按子代理配置过滤工具：先白名单（allowed_tools），再黑名单（disallowed_tools）。"""
+    filtered = all_tools
+
+    if allowed_tools is not None:
+        allowed_set = set(allowed_tools)
+        filtered = [t for t in filtered if t.name in allowed_set]
+
+    if disallowed_tools is not None:
+        disallowed_set = set(disallowed_tools)
+        filtered = [t for t in filtered if t.name not in disallowed_set]
+
+    return filtered
+
+
 def make_assistant_subagent(
     app_config: AppConfig,
     *,
@@ -72,7 +91,9 @@ def make_assistant_subagent(
             app_config=app_config,
             attach_tracing=False,
         ),
-        tools=tools or [],
+        tools=filter_tools(
+            tools or [], sub_config.tools, sub_config.disallowed_tools
+        ),
         system_prompt=sub_config.system_prompt or SYSTEM_PROMPT,
         state_schema=ThreadState,
         name=sub_config.name,

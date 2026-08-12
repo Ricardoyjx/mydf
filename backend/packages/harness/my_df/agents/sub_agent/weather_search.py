@@ -1,5 +1,6 @@
 from langchain.agents import create_agent
 from langchain.tools import BaseTool
+from my_df.agents.sub_agent.assistant import filter_tools
 from my_df.agents.thread_state import ThreadState
 from my_df.config.app_config import AppConfig
 from my_df.config.subagent_config import WEATHER_SEARCH_CONFIG, SubagentConfig
@@ -19,7 +20,7 @@ def make_node_weather_search(
             app_config=app_config,
             attach_tracing=False,
         ),
-        tools=tools,
+        tools=filter_tools(tools or [], config.tools, config.disallowed_tools),
         system_prompt=config.system_prompt,
         state_schema=ThreadState,
         name=config.name,
