@@ -129,6 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 milvus=app.state.milvus,
                 embedding_model=app.state.embedding_model,
                 tools=[search_weather],
+                event_store=app.state.event_store,
             )
             logger.info("Multi-Agent Supervisor 图已预热，请求时将复用该实例")
         except Exception:  # noqa: BLE001
