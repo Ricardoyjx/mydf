@@ -85,10 +85,23 @@ def _format_weather(data: dict, city: str, date: str) -> str:
     forecast = data.get("weather") or []
     for day in forecast[:3]:
         desc = _day_description(day.get("hourly"))
-        lines.append(
+        # 取中午 12 点时段代表当天（无则取第一条），补充湿度/风速/降水概率
+        hourly = day.get("hourly") or []
+        noon = next(
+            (h for h in hourly if h.get("time") == "1200"),
+            hourly[0] if hourly else {},
+        )
+        detail = (
             f"{day.get('date', '?')}：{desc or '未知'}，"
             f"{day.get('mintempC', '?')}~{day.get('maxtempC', '?')}°C"
         )
+        if noon.get("humidity"):
+            detail += (
+                f"，湿度 {noon.get('humidity')}%"
+                f"，风速 {noon.get('windspeedKmph', '?')} km/h"
+                f"，降水概率 {noon.get('chanceofrain', '?')}%"
+            )
+        lines.append(detail)
     return "\n".join(lines)
 
 
