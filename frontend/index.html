@@ -731,7 +731,7 @@ body{height:100vh;overflow:hidden}
 .sidebar{height:100vh;overflow-y:auto}
 .content{height:100vh;overflow:hidden}
 #chat-page{overflow:hidden}
-#rag-page,#memory-page{overflow-y:auto}
+#rag-page,#memory-page,#observability-page{overflow-y:auto}
 #chat-page .chat-container{min-height:0}
 #chat-page .messages{min-height:0}
 
@@ -749,6 +749,23 @@ body{height:100vh;overflow:hidden}
   .toolbar-left{flex-wrap:wrap}
   .toolbar input[type="text"]{width:100%}
 }
+
+/* ── 观测页：运行列表 + 事件时间线 ── */
+.obs-run-item{display:flex;align-items:center;gap:.6rem;padding:.55rem .7rem;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:.4rem;cursor:pointer;transition:border-color var(--transition),background var(--transition)}
+.obs-run-item:hover{border-color:var(--accent);background:var(--accent-subtle)}
+.obs-run-id{font-family:var(--font-mono);font-size:.78rem;color:var(--text-secondary);min-width:5.5rem}
+.obs-status{font-size:.7rem;padding:.1rem .45rem;border-radius:999px;text-transform:uppercase;letter-spacing:.03em}
+.obs-status.run-success{color:var(--green);background:var(--green-subtle)}
+.obs-status.run-error{color:var(--red);background:var(--red-subtle)}
+.obs-status.run-running{color:var(--accent);background:var(--accent-subtle)}
+.obs-status.run-interrupted,.obs-status.run-timeout{color:var(--yellow);background:rgba(180,83,9,.12)}
+.obs-run-meta{margin-left:auto;font-size:.72rem;color:var(--text-muted)}
+.obs-event{display:flex;align-items:baseline;gap:.55rem;padding:.42rem .5rem;border-bottom:1px dashed var(--border);font-size:.8rem}
+.obs-event:last-child{border-bottom:none}
+.obs-event-icon{width:1.15rem;text-align:center;flex-shrink:0}
+.obs-event-label{color:var(--text-secondary);flex-shrink:0;min-width:5.6rem;font-size:.72rem}
+.obs-event-detail{color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.obs-event-time{margin-left:auto;color:var(--text-muted);font-size:.68rem;flex-shrink:0;font-family:var(--font-mono)}
 </style>
 </head>
 <body>
@@ -760,6 +777,7 @@ body{height:100vh;overflow:hidden}
     <a class="side-item active" href="#/chat" data-tab="chat">💬 对话</a>
     <a class="side-item" href="#/rag" data-tab="rag">📚 知识库</a>
     <a class="side-item" href="#/memory" data-tab="memory">🧠 记忆</a>
+    <a class="side-item" href="#/observability" data-tab="observability">📊 观测</a>
   </nav>
   <div class="sidebar-foot">
     <span class="tag">dev</span>
@@ -843,6 +861,27 @@ body{height:100vh;overflow:hidden}
       <button class="btn-ghost" id="memory-refresh">刷新</button>
     </div>
     <div id="memory-content"><div class="memory-empty">加载中…</div></div>
+  </div>
+</div>
+</section>
+
+<!-- ── 页面：观测（运行事件流） ── -->
+<section class="page" id="observability-page">
+<div class="panel">
+  <div class="panel-card">
+    <div class="panel-head">
+      <h3 style="margin:0">运行记录</h3>
+      <button class="btn-ghost" id="obs-refresh">刷新</button>
+    </div>
+    <div id="obs-run-list"><div class="memory-empty">加载中…</div></div>
+  </div>
+
+  <div class="panel-card" id="obs-detail-card" style="display:none">
+    <div class="panel-head">
+      <h3 style="margin:0" id="obs-detail-title">事件时间线</h3>
+      <button class="btn-ghost" id="obs-detail-close">关闭</button>
+    </div>
+    <div id="obs-event-list"></div>
   </div>
 </div>
 </section>
@@ -1177,11 +1216,12 @@ document.addEventListener('keydown', (e) => {
 // =============================================================
 let ragLoaded = false;
 let memoryLoaded = false;
+let obsLoaded = false;
 
 // hash 路由：#/chat、#/rag、#/memory（每个功能独立成页，可刷新/分享/前进后退）
 function navigate() {
   const raw = (location.hash || '').replace(/^#\/?/, '');
-  const name = ['chat', 'rag', 'memory'].includes(raw) ? raw : 'chat';
+  const name = ['chat', 'rag', 'memory', 'observability'].includes(raw) ? raw : 'chat';
   document.querySelectorAll('.page').forEach((p) => {
     p.classList.toggle('active', p.id === name + '-page');
   });
@@ -1190,6 +1230,7 @@ function navigate() {
   });
   if (name === 'rag' && !ragLoaded) loadDocuments();
   if (name === 'memory' && !memoryLoaded) loadMemory();
+  if (name === 'observability' && !obsLoaded) loadRuns();
 }
 window.addEventListener('hashchange', navigate);
 navigate();
@@ -1426,6 +1467,101 @@ ragFileInput.addEventListener('change', (e) => {
 ragDocList.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-del]');
   if (btn) deleteDocument(btn.dataset.del);
+});
+
+// =============================================================
+// 观测页：运行列表 + 事件时间线
+// =============================================================
+const OBS_EVENT_META = {
+  run_start: ['🚀', '启动'],
+  run_end: ['🏁', '结束'],
+  token: ['⚡', 'Token'],
+  route: ['🔀', '路由'],
+  subagent_start: ['🤖', '子代理开始'],
+  subagent_end: ['✅', '子代理结束'],
+  reflect: ['🔍', '评审'],
+};
+
+async function loadRuns() {
+  const listEl = document.getElementById('obs-run-list');
+  listEl.innerHTML = '<div class="memory-empty">加载中…</div>';
+  try {
+    const data = await apiFetch('/api/runs?limit=50');
+    const runs = data.runs || [];
+    obsLoaded = true;
+    if (!runs.length) {
+      listEl.innerHTML = '<div class="memory-empty">暂无运行记录</div>';
+      return;
+    }
+    listEl.innerHTML = runs.map((r) => {
+      const status = esc(r.status || 'unknown');
+      const created = String(r.created_at || '').replace('T', ' ').slice(0, 19);
+      return `<div class="obs-run-item" data-run-id="${esc(r.run_id)}">
+        <span class="obs-run-id">${esc(String(r.run_id || '').slice(0, 8))}</span>
+        <span class="obs-status run-${status}">${status}</span>
+        <span class="obs-run-meta">${created} · ${r.total_tokens ?? 0} tok</span>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    listEl.innerHTML = `<div class="memory-empty">加载失败：${esc(err.message)}</div>`;
+  }
+}
+
+async function loadRunEvents(runId) {
+  const card = document.getElementById('obs-detail-card');
+  const listEl = document.getElementById('obs-event-list');
+  card.style.display = 'block';
+  document.getElementById('obs-detail-title').textContent =
+    `事件时间线 · ${String(runId).slice(0, 8)}`;
+  listEl.innerHTML = '<div class="memory-empty">加载中…</div>';
+  try {
+    const data = await apiFetch(`/api/runs/${encodeURIComponent(runId)}/events?limit=500`);
+    const events = data.events || [];
+    if (!events.length) {
+      listEl.innerHTML = '<div class="memory-empty">该运行暂无事件</div>';
+      return;
+    }
+    listEl.innerHTML = events.map(renderEvent).join('');
+  } catch (err) {
+    listEl.innerHTML = `<div class="memory-empty">加载失败：${esc(err.message)}</div>`;
+  }
+}
+
+function renderEvent(e) {
+  const [icon, label] = OBS_EVENT_META[e.event_type] || ['📄', esc(e.event_type || '事件')];
+  const meta = e.metadata || {};
+  let detail = '';
+  if (e.event_type === 'route') {
+    detail = `→ ${esc(meta.target || '?')}${meta.retry ? '（重试）' : ''} · ${esc(String(meta.task || '').slice(0, 60))}`;
+  } else if (e.event_type === 'token') {
+    detail = `${esc(meta.node || '')} · in ${meta.input_tokens ?? 0} / out ${meta.output_tokens ?? 0} / total ${meta.total_tokens ?? 0}`;
+  } else if (e.event_type === 'reflect') {
+    detail = `${meta.passed ? '通过' : '未通过'} · ${esc(String(meta.feedback || '').slice(0, 80))} · 第 ${meta.round ?? 0} 轮`;
+  } else if (e.event_type === 'subagent_start') {
+    detail = `${esc(meta.target || '')} · timeout ${meta.timeout_seconds ?? '-'}s`;
+  } else if (e.event_type === 'subagent_end') {
+    detail = `${esc(meta.target || '')} · ${esc(meta.status || '')}${meta.error ? ' · ' + esc(String(meta.error).slice(0, 60)) : ''}`;
+  } else if (e.event_type === 'run_end') {
+    detail = `${esc(meta.status || '')} · total ${meta.total_tokens ?? 0} tok`;
+  } else {
+    detail = esc(String(e.content || '').slice(0, 60));
+  }
+  const time = String(e.created_at || '').replace('T', ' ').slice(5, 19);
+  return `<div class="obs-event">
+    <span class="obs-event-icon">${icon}</span>
+    <span class="obs-event-label">${label}</span>
+    <span class="obs-event-detail">${detail || '-'}</span>
+    <span class="obs-event-time">${time}</span>
+  </div>`;
+}
+
+document.getElementById('obs-refresh').addEventListener('click', loadRuns);
+document.getElementById('obs-detail-close').addEventListener('click', () => {
+  document.getElementById('obs-detail-card').style.display = 'none';
+});
+document.getElementById('obs-run-list').addEventListener('click', (e) => {
+  const item = e.target.closest('.obs-run-item');
+  if (item) loadRunEvents(item.dataset.runId);
 });
 
 inputEl.focus();
