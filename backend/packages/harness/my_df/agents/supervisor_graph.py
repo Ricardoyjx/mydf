@@ -83,6 +83,12 @@ def _get_runtime_config(config: RunnableConfig) -> dict:
     return cfg
 
 
+def _event_context(config: RunnableConfig) -> tuple[str, str]:
+    """从运行配置提取 (thread_id, run_id)，用于可观测性事件关联。"""
+    cfg = _get_runtime_config(config)
+    return str(cfg.get("thread_id", "")), str(cfg.get("run_id", ""))
+
+
 def _message_text(msg: Any) -> str:
     """提取消息的纯文本内容"""
     if msg is None:
@@ -159,10 +165,13 @@ def _make_model_call_node(
 
 def _make_supervisor_router(
     registry: dict[str, tuple[SubagentConfig, CompiledStateGraph]],
+    event_store: Any | None = None,
 ) -> StateNode:
     """构建 supervisor 纯函数节点：解析 route_to_agent 调用，写 next / last_task。"""
 
-    def supervisor_router_node(state: ThreadState) -> dict[str, Any]:
+    async def supervisor_router_node(
+        state: ThreadState, config: RunnableConfig
+    ) -> dict[str, Any]:
         target: str | None = None
         task: str | None = None
         route_message_ids: list[str] = []
@@ -190,6 +199,22 @@ def _make_supervisor_router(
 
         if target and target in registry:
             update.update({"next": target, "last_task": task})
+            if event_store is not None:
+                try:
+                    thread_id, run_id = _event_context(config)
+                    await event_store.put(
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        event_type="route",
+                        category="trace",
+                        metadata={
+                            "target": target,
+                            "task": task,
+                            "retry": bool(state.get("reflection_feedback")),
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("写入 route 事件失败", exc_info=True)
             return update
         if target:
             logger.warning("Agent %s not found", target)
@@ -200,6 +225,7 @@ def _make_supervisor_router(
 
 def _make_subagent_node(
     registry: dict[str, tuple[SubagentConfig, CompiledStateGraph]],
+    event_store: Any | None = None,
 ) -> StateNode:
     """构建子代理执行节点：以当前 state 运行子图，结果合并回共享 messages。"""
 
@@ -213,6 +239,21 @@ def _make_subagent_node(
 
         sub_config, subgraph = entry
 
+        if event_store is not None:
+            try:
+                await event_store.put(
+                    thread_id=_event_context(config)[0],
+                    run_id=_event_context(config)[1],
+                    event_type="subagent_start",
+                    category="trace",
+                    metadata={
+                        "target": target,
+                        "timeout_seconds": sub_config.timeout_seconds,
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("写入 subagent_start 事件失败", exc_info=True)
+
         try:
             sub_config_run: RunnableConfig = cast(
                 RunnableConfig,
@@ -224,9 +265,31 @@ def _make_subagent_node(
                 timeout=sub_config.timeout_seconds,
             )
             messages = result.get("messages") or []
+            if event_store is not None:
+                try:
+                    await event_store.put(
+                        thread_id=_event_context(config)[0],
+                        run_id=_event_context(config)[1],
+                        event_type="subagent_end",
+                        category="trace",
+                        metadata={"target": target, "status": "ok", "messages": len(messages)},
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("写入 subagent_end 事件失败", exc_info=True)
             # 成功时清除 last_error，避免 reflect 读到上一轮失败记录误判
             return {"messages": messages, "next": None, "last_error": None}
         except asyncio.TimeoutError:
+            if event_store is not None:
+                try:
+                    await event_store.put(
+                        thread_id=_event_context(config)[0],
+                        run_id=_event_context(config)[1],
+                        event_type="subagent_end",
+                        category="trace",
+                        metadata={"target": target, "status": "timeout"},
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("写入 subagent_end 事件失败", exc_info=True)
             logger.warning(
                 "子代理 %s 执行超时（%ss）", target, sub_config.timeout_seconds
             )
@@ -235,6 +298,17 @@ def _make_subagent_node(
                 "last_error": f"子代理 {target} 执行超时（>{sub_config.timeout_seconds}s）",
             }
         except Exception as e:
+            if event_store is not None:
+                try:
+                    await event_store.put(
+                        thread_id=_event_context(config)[0],
+                        run_id=_event_context(config)[1],
+                        event_type="subagent_end",
+                        category="trace",
+                        metadata={"target": target, "status": "error", "error": str(e)},
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("写入 subagent_end 事件失败", exc_info=True)
             logger.exception("子代理 %s 执行失败", target)
             return {"next": None, "last_error": f"子代理{target}执行失败:{e}"}
 
@@ -288,7 +362,10 @@ async def _llm_review(
 
 
 def _make_reflection_node(
-    review_model: BaseChatModel, *, enable_llm_review: bool
+    review_model: BaseChatModel,
+    *,
+    enable_llm_review: bool,
+    event_store: Any | None = None,
 ) -> StateNode:
     """构建质量评审节点：规则检查 + 可选 LLM 评审，结果写回 state。"""
 
@@ -316,6 +393,22 @@ def _make_reflection_node(
                 logger.warning("LLM 审核失败: %s", e)
 
         logger.info("质量评审: passed=%s, feedback=%s", passed, feedback)
+
+        if event_store is not None:
+            try:
+                await event_store.put(
+                    thread_id=_event_context(config)[0],
+                    run_id=_event_context(config)[1],
+                    event_type="reflect",
+                    category="trace",
+                    metadata={
+                        "passed": passed,
+                        "feedback": feedback,
+                        "round": state.get("route_count", 0),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("写入 reflect 事件失败", exc_info=True)
 
         return {
             "reflection_passed": passed,
@@ -395,6 +488,7 @@ def build_supervisor_graph(
     tools: list[BaseTool] | None = None,
     enable_llm_review: bool = True,
     max_routes: int = MAX_ROUTES,
+    event_store: Any | None = None,
 ) -> CompiledStateGraph:
     """构建 Supervisor 顶层编排图。
     +
@@ -450,11 +544,15 @@ def build_supervisor_graph(
         ),
     )
 
-    builder.add_node("supervisor", _make_supervisor_router(registry))
-    builder.add_node("subagent", _make_subagent_node(registry))
+    builder.add_node("supervisor", _make_supervisor_router(registry, event_store))
+    builder.add_node("subagent", _make_subagent_node(registry, event_store))
     builder.add_node(
         "reflect",
-        _make_reflection_node(review_model, enable_llm_review=enable_llm_review),
+        _make_reflection_node(
+            review_model,
+            enable_llm_review=enable_llm_review,
+            event_store=event_store,
+        ),
     )
 
     builder.add_edge(START, "model_call")
