@@ -33,9 +33,10 @@ from my_df.agents.sub_agent.assistant import (
     GENERAL_PURPOSE_CONFIG,
     make_assistant_subagent,
 )
+from my_df.agents.sub_agent.weather_search import make_node_weather_search
 from my_df.agents.thread_state import ThreadState
 from my_df.config.app_config import AppConfig
-from my_df.config.subagent_config import SubagentConfig
+from my_df.config.subagent_config import WEATHER_SEARCH_CONFIG, SubagentConfig
 from my_df.models.factory import create_chat_model
 from my_df.runtime.milvus.base import MilvusStorage
 
@@ -365,10 +366,24 @@ def _build_default_registry(
 ) -> dict[str, tuple[SubagentConfig, CompiledStateGraph]]:
     """构建默认子代理注册表（第一版：general-purpose assistant）。"""
 
-    assistant_graph = make_assistant_subagent(
-        app_cofig, config=GENERAL_PURPOSE_CONFIG, tools=tools or []
-    )
-    return {GENERAL_PURPOSE_CONFIG.name: (GENERAL_PURPOSE_CONFIG, assistant_graph)}
+    registry = {
+        # 通用子代理
+        GENERAL_PURPOSE_CONFIG.name: (
+            GENERAL_PURPOSE_CONFIG,
+            make_assistant_subagent(
+                app_cofig, config=GENERAL_PURPOSE_CONFIG, tools=tools or []
+            ),
+        ),
+        # 天气查询子代理
+        WEATHER_SEARCH_CONFIG.name: (
+            WEATHER_SEARCH_CONFIG,
+            make_node_weather_search(
+                app_cofig, config=WEATHER_SEARCH_CONFIG, tools=tools or []
+            ),
+        ),
+    }
+
+    return registry
 
 
 def build_supervisor_graph(
