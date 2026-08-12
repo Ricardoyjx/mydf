@@ -133,7 +133,8 @@ class PyMilvusStorage(MilvusStorage):
     async def connect(self) -> None:
         """连接到 Milvus 服务。
 
-        使用指数退避重试，最多等待约 60 秒，应对 Milvus 首次启动时的延迟。
+        快速失败：3 次重试（约 5 秒）即放弃，避免 Milvus 未启动时
+        长时间阻塞服务启动（连接失败由上层降级处理）。
         """
         if self._client is not None:
             logger.debug("PyMilvusStorage 已连接，跳过")
@@ -141,7 +142,7 @@ class PyMilvusStorage(MilvusStorage):
 
         import asyncio
 
-        max_retries = 12
+        max_retries = 3
         base_delay = 1.0
         uri = f"tcp://{self._config.host}:{self._config.port}"
 

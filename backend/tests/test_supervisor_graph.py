@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 from langchain.tools import BaseTool
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.graph.state import CompiledStateGraph
 from my_df.agents.sub_agent.assistant import GENERAL_PURPOSE_CONFIG, filter_tools
 from my_df.agents.supervisor_graph import (
@@ -33,12 +33,14 @@ from my_df.agents.supervisor_graph import (
     _make_subagent_node,
     _make_supervisor_router,
     _rule_review,
+    _sanitize_messages,
     build_supervisor_graph,
     route_to_agent,
 )
-from my_df.agents.thread_state import ThreadState
+from my_df.agents.thread_state import ThreadState, merge_route_count
 from my_df.config.app_config import AppConfig
 from my_df.config.subagent_config import SubagentConfig
+from my_df.runtime.events.store.memory import MemoryRunEventStore
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -301,6 +303,38 @@ class TestReflectionNode:
         # 评审异常不致命：回退到规则检查结果（回答合法 → 通过）
         assert result["reflection_passed"] is True
 
+    def test_exhausted_writes_last_error(self):
+        """达到评审上限仍不通过 → 写 last_error，强制结束标记。"""
+        node = _make_reflection_node(
+            cast(BaseChatModel, _FakeReviewModel()),
+            enable_llm_review=False,
+            max_routes=3,
+        )
+        result = self._run(
+            node,
+            {"route_count": 2, "messages": [AIMessage(content="太短")]},
+        )
+
+        assert result["reflection_passed"] is False
+        assert result["route_count"] == 3
+        assert "上限" in result["last_error"]
+
+    def test_below_limit_no_last_error(self):
+        """未达上限时只回环，不写 last_error。"""
+        node = _make_reflection_node(
+            cast(BaseChatModel, _FakeReviewModel()),
+            enable_llm_review=False,
+            max_routes=5,
+        )
+        result = self._run(
+            node,
+            {"route_count": 1, "messages": [AIMessage(content="太短")]},
+        )
+
+        assert result["reflection_passed"] is False
+        assert result["route_count"] == 2
+        assert "last_error" not in result
+
 
 # ---------------------------------------------------------------------------
 # subagent_node
@@ -519,3 +553,137 @@ class TestHelpers:
         tools = cast(list[BaseTool], [_Tool("search_weather"), _Tool("task")])
         result = filter_tools(tools, allowed_tools=None, disallowed_tools=["task"])
         assert [t.name for t in result] == ["search_weather"]
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_messages：孤儿 tool_calls 清洗（防 400 回归）
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeMessages:
+    def test_orphan_tool_calls_removed(self):
+        """带 tool_calls 但无 ToolMessage 响应 → 整条移除。"""
+        orphan = _route_message("general-purpose", "写代码", msg_id="call-1")
+        assert _sanitize_messages([orphan]) == []
+
+    def test_answered_tool_chain_kept(self):
+        """AIMessage(tool_calls) + 对应 ToolMessage → 保留完整链。"""
+        ai = _route_message("general-purpose", "写代码", msg_id="call-2")
+        tool = ToolMessage(content="完成", tool_call_id="call-2")
+        cleaned = _sanitize_messages([ai, tool])
+        assert len(cleaned) == 2
+        assert cleaned[0].tool_calls[0]["id"] == "call-2"
+
+    def test_mixed_orphan_and_normal_keeps_normal(self):
+        """孤儿与正常链混合 → 只保留正常链。"""
+        orphan = _route_message("no-such", msg_id="call-1")
+        ai = _route_message("general-purpose", msg_id="call-2")
+        tool = ToolMessage(content="ok", tool_call_id="call-2")
+        cleaned = _sanitize_messages([orphan, ai, tool])
+        assert len(cleaned) == 2
+
+    def test_partial_answered_removes_whole_message(self):
+        """一条 AIMessage 多个 tool_calls 只响应部分 → 整条移除。"""
+        ai = AIMessage(
+            content="",
+            id="a1",
+            tool_calls=[
+                {"name": "x", "args": {}, "id": "c1", "type": "tool_call"},
+                {"name": "y", "args": {}, "id": "c2", "type": "tool_call"},
+            ],
+        )
+        tool = ToolMessage(content="ok", tool_call_id="c1")
+        cleaned = _sanitize_messages([ai, tool])
+        # 孤儿 AIMessage 被移除，ToolMessage 本身保留
+        assert len(cleaned) == 1
+        assert cleaned[0].type == "tool"
+
+    def test_plain_messages_untouched(self):
+        """无 tool_calls 的普通消息原样保留。"""
+        msgs = [HumanMessage(content="hi"), AIMessage(content="回答")]
+        assert _sanitize_messages(msgs) == msgs
+
+
+# ---------------------------------------------------------------------------
+# merge_route_count：覆盖式 reducer（跨 run 不累计回归）
+# ---------------------------------------------------------------------------
+
+
+class TestMergeRouteCount:
+    def test_inject_zero_resets_persisted(self):
+        """每次 run 注入 0，覆盖 checkpoint 恢复的旧值。"""
+        assert merge_route_count(7, 0) == 0
+
+    def test_absolute_value_overwrites(self):
+        """reflect 返回绝对值（当前+1），覆盖式生效。"""
+        assert merge_route_count(0, 3) == 3
+
+    def test_none_new_keeps_existing(self):
+        assert merge_route_count(3, None) == 3
+
+    def test_both_none_returns_zero(self):
+        assert merge_route_count(None, None) == 0
+
+
+# ---------------------------------------------------------------------------
+# 事件埋点：route / subagent / reflect 写入 event_store
+# ---------------------------------------------------------------------------
+
+
+class TestEventInstrumentation:
+    @staticmethod
+    def _events(store: MemoryRunEventStore, run_id: str = "r1") -> list[dict]:
+        return asyncio.run(store.list_events("t1", run_id))
+
+    def test_router_writes_route_event(self):
+        store = MemoryRunEventStore()
+        router = _make_supervisor_router(_registry(), event_store=store)
+        asyncio.run(
+            router(
+                {"messages": [_route_message("general-purpose", "写代码")]},
+                config={"configurable": {"thread_id": "t1", "run_id": "r1"}},
+            )
+        )
+
+        events = self._events(store)
+        assert len(events) == 1
+        assert events[0]["event_type"] == "route"
+        assert events[0]["metadata"]["target"] == "general-purpose"
+        assert events[0]["metadata"]["retry"] is False
+
+    def test_subagent_writes_start_and_end(self):
+        store = MemoryRunEventStore()
+        node = _make_subagent_node(_registry(), event_store=store)
+        asyncio.run(
+            node(
+                {"next": "general-purpose"},
+                config={"configurable": {"thread_id": "t1", "run_id": "r1"}},
+            )
+        )
+
+        events = self._events(store)
+        assert [e["event_type"] for e in events] == ["subagent_start", "subagent_end"]
+        assert events[0]["metadata"]["target"] == "general-purpose"
+        assert events[1]["metadata"]["status"] == "ok"
+
+    def test_reflection_writes_event_with_exhausted(self):
+        store = MemoryRunEventStore()
+        node = _make_reflection_node(
+            cast(BaseChatModel, _FakeReviewModel()),
+            enable_llm_review=False,
+            event_store=store,
+            max_routes=3,
+        )
+        asyncio.run(
+            node(
+                {"route_count": 2, "messages": [AIMessage(content="太短")]},
+                config={"configurable": {"thread_id": "t1", "run_id": "r1"}},
+            )
+        )
+
+        events = self._events(store)
+        assert len(events) == 1
+        assert events[0]["event_type"] == "reflect"
+        assert events[0]["metadata"]["passed"] is False
+        assert events[0]["metadata"]["round"] == 3
+        assert events[0]["metadata"]["exhausted"] is True
