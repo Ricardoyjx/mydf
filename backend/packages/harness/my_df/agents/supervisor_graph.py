@@ -15,6 +15,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, cast
 
+from langchain.agents.middleware import Runtime
 from langchain.tools import BaseTool, tool
 from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.messages import (
@@ -29,6 +30,8 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import START, CompiledStateGraph, StateNode
 from langgraph.store.base import BaseStore
 
+from my_df.agents.middlewares.memory_middleware import MemoryMiddleware
+from my_df.agents.middlewares.rag_middleware import RagMiddleware
 from my_df.agents.sub_agent.assistant import (
     GENERAL_PURPOSE_CONFIG,
     make_assistant_subagent,
@@ -156,6 +159,35 @@ def _make_model_call_node(
     async def model_call_node(
         state: ThreadState, config: RunnableConfig
     ) -> dict[str, Any]:
+        # 注入记忆 + 知识库上下文（复用中间件 abefore_model，与旧 lead_agent 行为一致）
+        cfg = _get_runtime_config(config)
+        user_id = cfg.get("user_id", "default")
+        runtime = Runtime(store=store)
+        context_middlewares = (
+            MemoryMiddleware(
+                agent_name="supervisor",
+                user_id=user_id,
+                store=store,
+                milvus=milvus,
+                embedding_model=embedding_model,
+            ),
+            RagMiddleware(
+                agent_name="supervisor",
+                user_id=user_id,
+                milvus=milvus,
+                embedding_model=embedding_model,
+            ),
+        )
+        for mw in context_middlewares:
+            try:
+                inject_update = await mw.abefore_model(state, runtime)
+                if inject_update is not None:
+                    merged: dict[str, Any] = dict(state)
+                    merged.update(inject_update)
+                    state = cast(ThreadState, merged)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("supervisor 上下文注入失败（%s）: %s", mw.name, e)
+
         messages = _sanitize_messages(state.get("messages") or [])
 
         call_messages: list[AnyMessage] = [SystemMessage(content=system_prompt)]
