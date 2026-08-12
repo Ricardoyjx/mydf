@@ -164,7 +164,8 @@ def test_search_only_returns_knowledge():
     results = asyncio.run(service.search(user_id="u1", query="计算器", top_k=3))
     assert results
     assert milvus.search_calls[0]["content_type"] == "knowledge"
-    assert milvus.search_calls[0]["top_k"] == 3
+    # 服务端为给 rerank / 过滤留出余量，粗召回 top_k * 4，最后再切片回 top_k
+    assert milvus.search_calls[0]["top_k"] == 12
 
 
 def test_list_documents_groups_by_document_id():

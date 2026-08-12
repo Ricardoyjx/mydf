@@ -13,7 +13,7 @@
 
 ## 目录结构
 
-```
+```bash
 my-df/
 ├── backend/
 │   ├── app/gateway/                 # FastAPI 网关（路由、依赖注入、lifespan）
@@ -32,7 +32,6 @@ my-df/
 │   └── pyproject.toml               # uv workspace
 ├── frontend/index.html              # 单页前端（由网关静态托管）
 └── README.md
-```
 
 ## 环境要求
 
@@ -221,10 +220,10 @@ flowchart TD
 
 使用了系统 Python 而不是项目虚拟环境。请使用 `.venv/bin/python start_dev.py`，或先 `source .venv/bin/activate`。
 
-**启动日志出现 "Milvus 未就绪" / "Embedding 模型加载失败"**
+***启动日志出现 "Milvus 未就绪" / "Embedding 模型加载失败"**
 
 说明向量基础设施不可用，不影响基础对话。如需 RAG 与语义记忆，先执行 `docker compose up -d` 并确认 `.env` 中相关配置。
 
-**模型下载慢或失败**
+***模型下载慢或失败**
 
 在 `.env` 中配置 `HF_TOKEN`，或将 `MYDF_EMBEDDING_MODEL` 换成更小的模型。

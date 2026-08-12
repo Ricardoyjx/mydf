@@ -42,9 +42,15 @@ async def test_sqlite_persistence():
 
     async with make_checkpointer(config) as cp:
         # 写入一个简单的 checkpoint
-        test_config = {"configurable": {"thread_id": "test-thread-001"}}
+        test_config = {
+            "configurable": {
+                "thread_id": "test-thread-001",
+                "checkpoint_ns": "",
+            }
+        }
         checkpoint = {
             "v": 1,
+            "id": "test-cp-001",
             "ts": "2026-07-24T00:00:00Z",
             "channel_values": {
                 "messages": [
@@ -53,7 +59,7 @@ async def test_sqlite_persistence():
                 ]
             },
         }
-        await cp.aput(test_config, checkpoint, {})
+        await cp.aput(test_config, checkpoint, {}, {})
 
         # 立即读取验证
         result = await cp.aget_tuple(test_config)

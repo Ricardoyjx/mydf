@@ -9,19 +9,18 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
 import asyncio
+from unittest.mock import MagicMock, patch
 
 import pytest
-from langchain.messages import HumanMessage, AIMessage
-
+from langchain.messages import AIMessage, HumanMessage
+from my_df.agents.memory.storage import create_empty_memory, utc_now_iso_z
 from my_df.agents.middlewares.memory_middleware import (
     MemoryMiddleware,
-    _has_content,
-    _format_memory_block,
     _extract_conversation_summary,
+    _format_memory_block,
+    _has_content,
 )
-from my_df.agents.memory.storage import create_empty_memory, utc_now_iso_z
 
 # =============================================================
 # 工具函数测试
