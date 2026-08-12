@@ -71,6 +71,17 @@ def merge_todos(
     return new
 
 
+def merge_route_count(existing: int | None, new: int | None) -> int:
+    """Reducer：route_count 采用覆盖语义（而非累加）。
+
+    该字段随 checkpointer 按线程持久化，若用 operator.add 累加，
+    会跨 run 累计导致 reflect 首次执行就撞上限。
+    """
+    if new is None:
+        return existing or 0
+    return new
+
+
 class ThreadState(AgentState):
     """线程级 Agent 状态，包含沙箱、文件、待办事项和已查看图像等信息。"""
 
@@ -88,7 +99,7 @@ class ThreadState(AgentState):
     next: NotRequired[
         str | None
     ]  # supervisor 路由目标（子代理名）；None/缺失 → 直接回答
-    route_count: Annotated[int, operator.add]  # 委派/评审轮次计数，防止 supervisor 循环
+    route_count: Annotated[int, merge_route_count]  # 委派/评审轮次（每次 run 从 0 开始）
     last_task: NotRequired[str | None]  # 最近一次委派的任务描述（供 reflect 评审）
     reflection_passed: NotRequired[bool | None]  # 最近一次质量评审是否通过
     reflection_feedback: NotRequired[str | None]  # 评审意见（不通过原因）
