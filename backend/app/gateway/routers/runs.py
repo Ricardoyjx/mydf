@@ -2,13 +2,37 @@
 
 import uuid
 
-from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
+from app.gateway.deps import (
+    get_run_context,
+    get_run_event_store,
+    get_run_manager,
+    get_stream_bridge,
+)
 from app.gateway.routers.thread_runs import RunCreateRequest
 from app.gateway.services import see_consumer, start_run
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
+
+
+@router.get("/{run_id}/events", summary="运行事件流水（可观测性）")
+async def get_run_events(
+    run_id: str,
+    request: Request,
+    event_type: str | None = Query(default=None, description="按事件类型过滤"),
+    limit: int = Query(default=500, ge=1, le=5000),
+):
+    """返回一次运行的可观测性事件流（run_start/route/subagent/reflect/token/run_end）。"""
+    event_store = get_run_event_store(request)
+    event_types = [event_type] if event_type else None
+    events = await event_store.list_events(
+        thread_id="",
+        run_id=run_id,
+        event_types=event_types,
+        limit=limit,
+    )
+    return {"run_id": run_id, "count": len(events), "events": events}
 
 
 @router.post("/stream")
