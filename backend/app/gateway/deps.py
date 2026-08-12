@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from my_df.config.app_config import AppConfig, get_app_config
 from my_df.runtime.checkpointer.async_provider import make_checkpointer
+from my_df.runtime.events.store import RunEventStore, make_event_store
 from my_df.runtime.runs.manager import RunManager
 from my_df.runtime.runs.worker import RunContext
 from my_df.runtime.store.async_provider import make_store
@@ -57,6 +58,10 @@ async def langgraph_runtime(
 
         app.state.run_manager = RunManager(store=app.state.run_store)
 
+        app.state.event_store = await stack.enter_async_context(
+            make_event_store(config)
+        )
+
         yield
 
 
@@ -94,9 +99,9 @@ get_run_manager: Callable[[Request], RunManager] = _require(
 get_checkpointer: Callable[[Request], BaseCheckpointSaver | None] = _require(
     "checkpointer", "Checkpointer"
 )
-# get_run_event_store: Callable[[Request], RunEventStore] = _require(
-#     "run_event_store", "Run event store"
-# )
+get_run_event_store: Callable[[Request], RunEventStore] = _require(
+    "event_store", "Run event store"
+)
 # get_feedback_repo: Callable[[Request], FeedbackRepository] = _require(
 #     "feedback_repo", "Feedback"
 # )
@@ -122,7 +127,6 @@ def get_run_context(request: Request) -> RunContext:
         checkpointer=getattr(request.app.state, "checkpointer", None),
         # store=get_store(request),
         store=getattr(request.app.state, "store", None),
-        # event_store=get_run_event_store(request),
         event_store=getattr(request.app.state, "event_store", None),
         run_events_config=getattr(request.app.state, "run_events_config", None),
         # thread_store=get_thread_store(request),
