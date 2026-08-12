@@ -202,11 +202,17 @@ class KnowledgeService:
         )
 
         if self._rerank is not None:
-            scores = await self._rerank.reranker(query, [r.text for r in result])
-            ranked = sorted(zip(scores, result), key=lambda pair: pair[0], reverse=True)
-            result = [item for _, item in ranked]
-            for score, item in ranked:
-                item.score = score
+            try:
+                await self._rerank.ensure_loaded()
+                scores = await self._rerank.reranker(query, [r.text for r in result])
+                ranked = sorted(
+                    zip(scores, result), key=lambda pair: pair[0], reverse=True
+                )
+                result = [item for _, item in ranked]
+                for score, item in ranked:
+                    item.score = score
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Reranker 懒加载或精排失败，本次跳过精排: %s", e)
 
         if min_score is not None:
             result = [r for r in result if r.score >= min_score]
