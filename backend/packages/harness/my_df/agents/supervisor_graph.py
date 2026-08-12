@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from langchain.tools import BaseTool, tool
 from langchain_core.language_models import BaseChatModel, LanguageModelInput
@@ -147,7 +147,11 @@ def _make_model_call_node(
             config=config,
         )
 
-        return {"messages": [response]}
+        update: dict[str, Any] = {"messages": [response]}
+        # 消费即清：feedback 已注入本轮，防止下轮重复注入过期的评审意见
+        if feedback:
+            update["reflection_feedback"] = None
+        return update
 
     return model_call_node
 
@@ -209,12 +213,18 @@ def _make_subagent_node(
         sub_config, subgraph = entry
 
         try:
+            sub_config_run: RunnableConfig = cast(
+                RunnableConfig,
+                {**config, "recursion_limit": sub_config.max_turns},
+            )
+            # 让 max_turns 配置真正生效：子图递归上限按子代理配置
             result = await asyncio.wait_for(
-                subgraph.ainvoke(state, config=config),
+                subgraph.ainvoke(state, config=sub_config_run),
                 timeout=sub_config.timeout_seconds,
             )
             messages = result.get("messages") or []
-            return {"messages": messages, "next": None}
+            # 成功时清除 last_error，避免 reflect 读到上一轮失败记录误判
+            return {"messages": messages, "next": None, "last_error": None}
         except asyncio.TimeoutError:
             logger.warning(
                 "子代理 %s 执行超时（%ss）", target, sub_config.timeout_seconds
@@ -355,7 +365,9 @@ def _build_default_registry(
 ) -> dict[str, tuple[SubagentConfig, CompiledStateGraph]]:
     """构建默认子代理注册表（第一版：general-purpose assistant）。"""
 
-    assistant_graph = make_assistant_subagent(app_cofig, tools=tools or [])
+    assistant_graph = make_assistant_subagent(
+        app_cofig, config=GENERAL_PURPOSE_CONFIG, tools=tools or []
+    )
     return {GENERAL_PURPOSE_CONFIG.name: (GENERAL_PURPOSE_CONFIG, assistant_graph)}
 
 
