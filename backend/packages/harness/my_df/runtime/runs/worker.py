@@ -58,6 +58,7 @@ class RunStats:
         self.message_count: int = 0
         self.last_ai_message: str | None = None
         self.first_human_message: str | None = None
+        self.last_error: str | None = None  # 运行期错误标记（如评审超限强制结束）
         # 已发布消息 id 集合：嵌套 chunk 中同一消息会多次出现，需要去重
         self._published_message_ids: set[str] = set()
 
@@ -110,12 +111,15 @@ async def run_agent(
 
     if event_store is not None:
         try:
-            await event_store.put(
-                thread_id=thread_id,
-                run_id=run_id,
-                event_type="run_start",
-                category="trace",
-                metadata={"status": "running"},
+            await asyncio.wait_for(
+                event_store.put(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    event_type="run_start",
+                    category="trace",
+                    metadata={"status": "running"},
+                ),
+                timeout=2,
             )
         except Exception:  # noqa: BLE001
             logger.warning("写入 run_start 事件失败", exc_info=True)
@@ -148,12 +152,21 @@ async def run_agent(
                     stats.first_human_message = str(content)[:2000]
                 break
 
+    # 重置路由计数：route_count 是线程级 state，跨 run 会从 checkpoint 恢复，
+    # 这里显式注入 0，配合覆盖式 reducer 保证每次 run 从 0 开始
+    graph_input = dict(graph_input)
+    graph_input["route_count"] = 0
+
     # 3. 遍历 astream，捕获所有异常
     try:
         async for chunk in agent_factory.astream(graph_input, config=config):
             try:
                 await process_chunk(
-                    bridge, run_id, chunk, stats, thread_id=thread_id,
+                    bridge,
+                    run_id,
+                    chunk,
+                    stats,
+                    thread_id=thread_id,
                     event_store=event_store,
                 )
             except Exception as e:
@@ -164,7 +177,9 @@ async def run_agent(
                     {"message": f"处理事件时出错: {e}", "code": "CHUNK_ERROR"},
                 )
         final_status = RunStatus.success
-        return RunStatus.success, stats
+        if stats.last_error:
+            final_status = RunStatus.error
+        return final_status, stats
     except asyncio.CancelledError:
         final_status = RunStatus.interrupted
         logger.info("Agent 运行被取消 (run_id=%s)", run_id)
@@ -182,26 +197,30 @@ async def run_agent(
         )
         return RunStatus.error, stats
     finally:
-        # 写入 run_end 事件（与结束哨兵同步）
+        # 先发结束哨兵，确保前端 SSE 流一定结束（不被事件写入拖住）
+        await bridge.publish_end(run_id)
+        # 再写入 run_end 事件（超时保护，失败不影响流）
         if event_store is not None:
             try:
-                await event_store.put(
-                    thread_id=thread_id,
-                    run_id=run_id,
-                    event_type="run_end",
-                    category="trace",
-                    metadata={
-                        "status": final_status.value,
-                        "total_tokens": stats.total_tokens,
-                        "lead_agent_tokens": stats.lead_agent_tokens,
-                        "subagent_tokens": stats.subagent_tokens,
-                        "llm_call_count": stats.llm_call_count,
-                    },
+                await asyncio.wait_for(
+                    event_store.put(
+                        thread_id=thread_id,
+                        run_id=run_id,
+                        event_type="run_end",
+                        category="trace",
+                        metadata={
+                            "status": final_status.value,
+                            "error": stats.last_error,
+                            "total_tokens": stats.total_tokens,
+                            "lead_agent_tokens": stats.lead_agent_tokens,
+                            "subagent_tokens": stats.subagent_tokens,
+                            "llm_call_count": stats.llm_call_count,
+                        },
+                    ),
+                    timeout=2,
                 )
             except Exception:  # noqa: BLE001
                 logger.warning("写入 run_end 事件失败", exc_info=True)
-        # 确保结束哨兵一定会发送，前端才能知道流已结束
-        await bridge.publish_end(run_id)
 
 
 async def process_chunk(
@@ -259,11 +278,18 @@ async def process_chunk(
     #         # 最终回退：发原始字符串
     #         await bridge.publish(run_id, "updates", raw[:200])
     # except Exception as e:
-    #     logger.error("process_chunk error: %s", e, exc_info=True)  # noqa: G201
+    #     logger.error("process_chunk error: %s", e, exc_info=True)
     #     await bridge.publish(run_id, "error", {"message": f"process_chunk: {e}"})
 
     try:
         for node_name, output in chunk.items():
+            # 可观测性：reflect 节点输出里的 last_error（评审超限强制结束）
+            if (
+                node_name == "reflect"
+                and isinstance(output, dict)
+                and output.get("last_error")
+            ):
+                stats.last_error = output["last_error"]
             bucket = "subagent" if node_name == "subagent" else "lead"
             for messages in _iter_message_payloads(output):
                 if not messages:
@@ -295,17 +321,20 @@ async def process_chunk(
                 # 可观测性：记录 token 事件（按节点分账）
                 if event_store is not None:
                     try:
-                        await event_store.put(
-                            thread_id=thread_id,
-                            run_id=run_id,
-                            event_type="token",
-                            category="trace",
-                            metadata={
-                                "node": node_name,
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                                "total_tokens": total_tokens,
-                            },
+                        await asyncio.wait_for(
+                            event_store.put(
+                                thread_id=thread_id,
+                                run_id=run_id,
+                                event_type="token",
+                                category="trace",
+                                metadata={
+                                    "node": node_name,
+                                    "input_tokens": input_tokens,
+                                    "output_tokens": output_tokens,
+                                    "total_tokens": total_tokens,
+                                },
+                            ),
+                            timeout=2,
                         )
                     except Exception:  # noqa: BLE001
                         logger.warning("写入 token 事件失败", exc_info=True)
