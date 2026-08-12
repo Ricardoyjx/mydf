@@ -106,12 +106,19 @@ class _FakeModel:
 
 
 class TestSupervisorRouter:
+    def _run(self, node: Any, state: dict) -> dict:
+        """异步节点统一执行入口（节点签名为 (state, config)）。"""
+        async def _main():
+            return await node(state, config={})
+
+        return asyncio.run(_main())
+
     def test_valid_delegation_sets_next_and_task(self):
         """合法委派：解析 route_to_agent，写 next / last_task。"""
         router: Any = _make_supervisor_router(_registry())
         state = {"messages": [_route_message("general-purpose", "写代码")]}
 
-        result = router(state)
+        result = self._run(router, state)
 
         assert result["next"] == "general-purpose"
         assert result["last_task"] == "写代码"
@@ -125,7 +132,7 @@ class TestSupervisorRouter:
         router: Any = _make_supervisor_router(_registry())
         state = {"messages": [_route_message("no-such-agent")]}
 
-        result = router(state)
+        result = self._run(router, state)
 
         assert result["next"] is None
         assert "last_task" not in result
@@ -136,7 +143,7 @@ class TestSupervisorRouter:
         router: Any = _make_supervisor_router(_registry())
         state = {"messages": [AIMessage(content="直接回答")]}
 
-        result = router(state)
+        result = self._run(router, state)
 
         assert result["next"] is None
         assert "messages" not in result
