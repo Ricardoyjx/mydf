@@ -29,7 +29,7 @@ if __name__ == "__main__":
         "app.gateway.app:app",
         host=config.host,
         port=config.port,
-        reload=True,
+        reload=False,
         log_level="info",
         access_log=False,
     )
