@@ -1,6 +1,5 @@
 """FastAPI 网关入口：应用生命周期管理 + 路由注册。"""
 
-import asyncio
 import logging
 import os
 import time
@@ -19,6 +18,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from my_df.agents.supervisor_graph import build_supervisor_graph
 from my_df.config.app_config import get_app_config
 from my_df.runtime.embeddings.sentence import SentenceEmbeddings
 from my_df.runtime.milvus.async_provider import make_milvus_storage
@@ -103,16 +103,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("Embedding 模型加载失败（向量检索不可用，其他功能正常）")
         app.state.embedding_model = None
 
-    # 5. 初始化 reranker 模型（可选；需显式启用，下载超时自动降级）
+    # 5. 注册 reranker 模型（懒加载：启动不占内存，首次搜索时加载）
     if startup_config.reranker.enable:
-        try:
-            reranker = SentenceRerank(model_name=startup_config.reranker.model)
-            await asyncio.wait_for(reranker.load(), timeout=120)
-            app.state.reranker = reranker
-            logger.info("Reranker 模型已就绪: model=%s", reranker._model_name)
-        except Exception:  # noqa: BLE001
-            logger.warning("Reranker 加载失败或超时（RAG 精排不可用，其他功能正常）")
-            app.state.reranker = None
+        app.state.reranker = SentenceRerank(
+            model_name=startup_config.reranker.model
+        )
+        logger.info(
+            "Reranker 已注册（懒加载，首次搜索时加载）: model=%s",
+            app.state.reranker._model_name,
+        )
     else:
         logger.info("Reranker 未启用（MYDF_RERANK_ENABLED=true 可开启精排）")
         app.state.reranker = None
@@ -121,10 +120,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     async with langgraph_runtime(app, startup_config):
         logger.info("LangGraph 运行时初始化完成")
 
+        # 7. 预热 Multi-Agent Supervisor 编排图（启动构建一次，请求时复用）
+        try:
+            app.state.agent_factory = build_supervisor_graph(
+                startup_config,
+                store=app.state.store,
+                milvus=app.state.milvus,
+                embedding_model=app.state.embedding_model,
+            )
+            logger.info("Multi-Agent Supervisor 图已预热，请求时将复用该实例")
+        except Exception:  # noqa: BLE001
+            logger.exception("Supervisor 图预热失败，请求时将按需构建")
+            app.state.agent_factory = None
+
         yield
 
     # 清理 Milvus 连接（在 langgraph_runtime 关闭后）
     await _milvus_stack.aclose()
+
+    # 释放本地模型（embedding / reranker），避免 reload 旧进程残留
+    embedder = getattr(app.state, "embedding_model", None)
+    if embedder is not None:
+        await embedder.close()
+    reranker = getattr(app.state, "reranker", None)
+    if reranker is not None:
+        await reranker.close()
     logger.info("API 网关关闭中")
 
 
