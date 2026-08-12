@@ -43,7 +43,8 @@ class RunCreateRequest(BaseModel):
         default=None, description="SSE 是否支持断线重连"
     )
     on_disconnect: Literal["cancel", "continue"] = Field(
-        default="cancel", description="SSE 断开时的行为：取消运行或继续执行"
+        default="continue",
+        description="SSE 断开时的行为：取消运行或继续执行（默认继续，前端无取消按钮）",
     )
     on_completion: Literal["delete", "keep"] = Field(
         default="keep", description="完成后是否删除临时线程"
