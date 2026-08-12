@@ -1,0 +1,20 @@
+# Agent 评测场景集（EDD）
+#
+# route 取值：
+#   direct               — supervisor 应直接回答，不委派
+#   subagent:<name>      — 应委派给指定子代理
+#
+# must_contain           — 最终回答必须包含的关键词（空列表 = 仅要求非空）
+
+cases:
+  - name: weather-wuhan-tomorrow
+    input: "武汉明天天气怎么样？"
+    expected:
+      route: "subagent:weather_search"
+      must_contain: ["武汉", "°C"]
+
+  - name: greeting-direct
+    input: "你好，介绍一下你自己"
+    expected:
+      route: "direct"
+      must_contain: []

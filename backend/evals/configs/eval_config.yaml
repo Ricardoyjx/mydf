@@ -1,0 +1,17 @@
+# 评测配置
+
+# LLM 质量评审（reflect）：true 更严格但增加成本
+llm_review: false
+
+# 图执行递归上限
+recursion_limit: 100
+
+# 单场景超时（秒），防止评测卡死
+timeout_seconds: 120
+
+# 评测线程用户隔离标识
+user_id: "eval"
+
+# supervisor/子代理模型：null = 使用默认模型
+model: null
+thinking: false

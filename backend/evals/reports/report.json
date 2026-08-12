@@ -1,0 +1,43 @@
+[
+  {
+    "name": "weather-wuhan-tomorrow",
+    "input": "武汉明天天气怎么样？",
+    "checks": {
+      "route": true,
+      "tool": true,
+      "content": true
+    },
+    "passed": true,
+    "fail_reasons": [],
+    "nodes": [
+      "model_call",
+      "reflect",
+      "subagent",
+      "supervisor"
+    ],
+    "tool_calls": [
+      "route_to_agent",
+      "search_weather"
+    ],
+    "last_ai": "根据查询到的天气预报信息，**武汉明天（2026年8月12日）**的天气为：\n\n- 🌧️ **局部有雨**\n- 🌡️ 气温 **24～27°C**\n\n由于明天有降雨，建议您出门记得携带雨具，并注意路况。如果您还需要更具体的信息（比如风力、湿度等），也可以告诉我哦！",
+    "elapsed_s": 5.2
+  },
+  {
+    "name": "greeting-direct",
+    "input": "你好，介绍一下你自己",
+    "checks": {
+      "route": true,
+      "tool": true,
+      "content": true
+    },
+    "passed": true,
+    "fail_reasons": [],
+    "nodes": [
+      "model_call",
+      "supervisor"
+    ],
+    "tool_calls": [],
+    "last_ai": "你好！我是 **my-df 的顶层编排者（Supervisor）**，负责协调和调度整个系统的工作。😊\n\n以下是我的核心职责：\n\n## 🎯 我的角色\n我像一个\"总调度员\"，会根据你的需求判断最佳处理方式：\n\n1. **直接回答**：对于简单问答、闲聊或信息查询，我会直接回应你，不经过中间环节。\n\n2. **委派子代理**：对于复杂、多步骤的任务，我会调用路由工具，把任务分配给最合适的专业子代理去执行。\n\n## 🤝 我可以调度的子代理\n\n| 子代理 | 擅长领域 |\n|--------|---------|\n| **general-purpose** | 处理复杂多步骤任务，需要探索+修改、复杂",
+    "elapsed_s": 2.8
+  }
+]
