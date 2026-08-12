@@ -1,12 +1,13 @@
 # my-df
 
-基于 LangGraph 的多 Agent 协作网关。FastAPI 提供 REST 与 SSE 流式接口，内置对话记忆（Memory）、知识库检索（RAG）、计划模式（Todo）等中间件，前端为单页 SPA。
+基于 LangGraph 的多 Agent 协作网关。FastAPI 提供 REST 与 SSE 流式接口，内置对话记忆（Memory）、知识库检索（RAG）、计划模式（Todo）等中间件；顶层 Supervisor 负责把任务委派给专业子代理，并通过质量评审闭环（Reflexion）保证输出质量。前端为单页 SPA。
 
 ## 技术栈
 
 - Python 3.13，包管理统一使用 `uv`（禁止 pip / conda）
 - FastAPI + Uvicorn（网关）
 - LangGraph / LangChain（Agent 框架与中间件链）
+- LangGraph Supervisor 编排（多 Agent 委派路由 + 子代理注册表 + 质量评审闭环）
 - Milvus + sentence-transformers（向量检索 / RAG / 语义记忆）
 - SQLite / PostgreSQL（checkpointer 持久化）
 
@@ -18,10 +19,13 @@ my-df/
 │   ├── app/gateway/                 # FastAPI 网关（路由、依赖注入、lifespan）
 │   ├── packages/harness/            # my-df-harness：Agent 框架
 │   │   └── my_df/
-│   │       ├── agents/              # Lead Agent、中间件、ThreadState
+│   │       ├── agents/              # Supervisor 编排图、子代理、中间件、ThreadState
+│   │       │   ├── supervisor_graph.py  # Supervisor 顶层编排图（路由委派 + 质量评审）
+│   │       │   ├── sub_agent/           # 子代理（general-purpose / weather_search）
+│   │       │   └── tools/               # 工具（search_weather 等）
 │   │       ├── rag/                 # 知识库切块、入库、检索
 │   │       ├── runtime/             # checkpointer / store / stream bridge / milvus
-│   │       └── config/              # 环境变量与配置模型
+│   │       └── config/              # 环境变量与配置模型（含 subagent_config.py）
 │   ├── tests/                       # pytest 测试
 │   ├── docker-compose.yml           # Milvus / PostgreSQL 等基础设施
 │   ├── start_dev.py                 # 开发启动脚本
@@ -164,9 +168,52 @@ curl -N -X POST http://localhost:8001/api/runs/stream \
 
 ## 核心机制
 
+- **多 Agent 编排（Supervisor）**：顶层 LLM 绑定 `route_to_agent` 工具，按需把任务委派给注册表中的子代理；子代理在独立 `max_turns` / 超时约束下执行，结果回到共享消息流。
+- **质量评审（Reflexion 闭环）**：子代理完成后先做零成本规则检查（空回答 / 回答过短），可选启用 LLM 评审（PASS/FAIL）；不通过时把评审反馈注入下一轮 Supervisor 重新编排，最多重试 `MAX_ROUTES=5` 次，超限强制结束，防止死循环。
 - **中间件链**：Memory（持久化记忆 + Milvus 语义检索）→ RAG（知识库检索）→ DynamicContext（注入当前时间）→ Todo（`MYDF_IS_PLAN_MODE=1` 时启用）。
 - **SSE 流式**：生产者（Agent worker）与消费者（SSE 端点）通过 `StreamBridge`（内存队列）解耦，支持心跳与 `Last-Event-ID` 断线重连。
 - **持久化**：checkpointer 支持 `memory` / `sqlite` / `postgres`，与 store 共用同一配置段，保证重启后对话历史不丢失。
+
+## 多 Agent 架构
+
+### 编排流程
+
+```mermaid
+flowchart TD
+    START --> model_call[model_call<br/>Supervisor LLM<br/>绑定 route_to_agent 工具]
+    model_call --> supervisor[supervisor<br/>解析委派意图]
+    supervisor -->|合法委派| sub_agent[sub_agent<br/>子代理独立执行]
+    supervisor -->|直接回答 / 非法目标| END
+    sub_agent --> reflect[reflect<br/>质量评审]
+    reflect -->|通过| END
+    reflect -->|不通过且未超限| model_call
+    reflect -->|超过 MAX_ROUTES| END
+```
+
+### 子代理注册表
+
+每个子代理由 `SubagentConfig`（`my_df/config/subagent_config.py`）定义：
+
+| 字段 | 说明 |
+| --- | --- |
+| `name` / `description` | 名称与能力描述；description 会注入 Supervisor 提示词，供其决策委派 |
+| `system_prompt` | 子代理系统提示词 |
+| `tools` / `disallowed_tools` | 工具白名单 / 黑名单过滤 |
+| `model` | 模型名；`"inherit"` 表示复用默认模型 |
+| `max_turns` / `timeout_seconds` | 子代理递归上限与执行超时，防止子代理失控 |
+
+内置子代理：
+
+- `general-purpose`：通用助手，继承全部工具，负责多步复杂任务，输出结构化总结。
+- `weather_search`：天气查询子代理，调用 `search_weather` 工具（wttr.in 免费接口，无需 API key），英文天气描述自动翻译为中文。
+
+新增子代理三步：在 `agents/sub_agent/` 实现子代理（复用 `make_assistant_subagent` 或自定义节点）→ 定义 `SubagentConfig` → 在 `supervisor_graph._build_default_registry` 中注册。
+
+### 运行层适配
+
+- worker 递归提取子代理嵌套输出，并按消息 id 去重，避免同一消息重复推送。
+- token 消耗按 `lead_agent`（supervisor / reflect）与 `subagent` 分账，便于成本观测。
+- 网关启动时预热 Supervisor 编排图，请求复用同一实例；构建失败自动降级为按需构建。
 
 ## 常见问题
 
