@@ -128,9 +128,7 @@ def _sanitize_messages(messages: list[Any]) -> list[Any]:
     for msg in messages:
         calls = getattr(msg, "tool_calls", None) or []
         if calls and not all(str(c.get("id", "")) in answered for c in calls):
-            logger.debug(
-                "过滤孤儿 tool_calls 消息: id=%s", getattr(msg, "id", None)
-            )
+            logger.debug("过滤孤儿 tool_calls 消息: id=%s", getattr(msg, "id", None))
             continue
         cleaned.append(msg)
     return cleaned
@@ -294,9 +292,7 @@ def _make_subagent_node(
             )
             # 让 max_turns 配置真正生效：子图递归上限按子代理配置
             clean_state = dict(state)
-            clean_state["messages"] = _sanitize_messages(
-                state.get("messages") or []
-            )
+            clean_state["messages"] = _sanitize_messages(state.get("messages") or [])
             result = await asyncio.wait_for(
                 subgraph.ainvoke(clean_state, config=sub_config_run),
                 timeout=sub_config.timeout_seconds,

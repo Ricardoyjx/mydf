@@ -107,11 +107,37 @@ services:
     networks:
       - my-df-net
 
+  app:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: my-df-app
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      # 容器内服务名覆盖本地 localhost 配置
+      - MYDF_MILVUS_HOST=milvus
+      - MYDF_CHECKPOINTER_PATH=postgresql://postgres:postgres@postgres:5432/mydf
+    volumes:
+      # HF 模型缓存（embedding/reranker 首次下载后持久化）
+      - hf-cache:/data/hf-cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - my-df-net
+
 volumes:
   etcd-data:
   minio-data:
   milvus-data:
   postgres-data:
+  hf-cache:
 
 networks:
   my-df-net:
