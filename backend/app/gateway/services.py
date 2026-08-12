@@ -70,18 +70,16 @@ async def start_run(
     #     embedding_model=getattr(request.app.state, "embedding_model", None),
     # )  # type: ignore
 
-    # 构造 Supervisor 编排图（Lead Agent / Sub Agent 架构）
-    app_config = context.app_config or get_app_config()
-    agent_factory = build_supervisor_graph(
-        app_config,
-        store=context.store,
-        milvus=getattr(
-            request.app.state,
-            "milvus",
-            None,
-        ),
-        embedding_model=getattr(request.app.state, "embedding_model", None),
-    )
+    # 优先复用启动时预热的 Supervisor 编排图；未预热/失败时按需构建
+    agent_factory = getattr(request.app.state, "agent_factory", None)
+    if agent_factory is None:
+        app_config = context.app_config or get_app_config()
+        agent_factory = build_supervisor_graph(
+            app_config,
+            store=context.store,
+            milvus=getattr(request.app.state, "milvus", None),
+            embedding_model=getattr(request.app.state, "embedding_model", None),
+        )
     graph_input = body.input
     config = build_run_config(
         thread_id=thread_id,
