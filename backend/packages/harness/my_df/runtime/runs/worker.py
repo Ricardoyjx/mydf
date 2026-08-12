@@ -104,6 +104,21 @@ async def run_agent(
         ``RunStatus.interrupted``。
     """
     stats = RunStats()
+    final_status: RunStatus = RunStatus.error  # 终态记录（finally 中写入事件）
+    event_store = context.event_store
+    thread_id = str((config.get("configurable") or {}).get("thread_id", ""))
+
+    if event_store is not None:
+        try:
+            await event_store.put(
+                thread_id=thread_id,
+                run_id=run_id,
+                event_type="run_start",
+                category="trace",
+                metadata={"status": "running"},
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("写入 run_start 事件失败", exc_info=True)
 
     # 1. 注入 checkpointer（图编译后附着，模仿 LangGraph Platform 方案）
     if context.checkpointer is not None:
@@ -111,6 +126,7 @@ async def run_agent(
 
     # 2. 保护：graph_input 为 None
     if graph_input is None:
+        final_status = RunStatus.error
         await bridge.publish(
             run_id,
             "error",
@@ -136,7 +152,10 @@ async def run_agent(
     try:
         async for chunk in agent_factory.astream(graph_input, config=config):
             try:
-                await process_chunk(bridge, run_id, chunk, stats)
+                await process_chunk(
+                    bridge, run_id, chunk, stats, thread_id=thread_id,
+                    event_store=event_store,
+                )
             except Exception as e:
                 logger.exception("处理 chunk 时出错 (run_id=%s)", run_id)
                 await bridge.publish(
@@ -144,14 +163,17 @@ async def run_agent(
                     "error",
                     {"message": f"处理事件时出错: {e}", "code": "CHUNK_ERROR"},
                 )
+        final_status = RunStatus.success
         return RunStatus.success, stats
     except asyncio.CancelledError:
+        final_status = RunStatus.interrupted
         logger.info("Agent 运行被取消 (run_id=%s)", run_id)
         await bridge.publish(
             run_id, "error", {"message": "运行已被取消", "code": "CANCELLED"}
         )
         return RunStatus.interrupted, stats
     except Exception as e:
+        final_status = RunStatus.error
         logger.exception("Agent 运行失败 (run_id=%s)", run_id)
         await bridge.publish(
             run_id,
@@ -160,12 +182,36 @@ async def run_agent(
         )
         return RunStatus.error, stats
     finally:
+        # 写入 run_end 事件（与结束哨兵同步）
+        if event_store is not None:
+            try:
+                await event_store.put(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    event_type="run_end",
+                    category="trace",
+                    metadata={
+                        "status": final_status.value,
+                        "total_tokens": stats.total_tokens,
+                        "lead_agent_tokens": stats.lead_agent_tokens,
+                        "subagent_tokens": stats.subagent_tokens,
+                        "llm_call_count": stats.llm_call_count,
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("写入 run_end 事件失败", exc_info=True)
         # 确保结束哨兵一定会发送，前端才能知道流已结束
         await bridge.publish_end(run_id)
 
 
 async def process_chunk(
-    bridge: StreamBridge, run_id: str, chunk: dict, stats: RunStats
+    bridge: StreamBridge,
+    run_id: str,
+    chunk: dict,
+    stats: RunStats,
+    *,
+    thread_id: str,
+    event_store: Any | None,
 ):
     """处理单个 agent 输出 chunk。
 
@@ -245,6 +291,24 @@ async def process_chunk(
                     stats.lead_agent_tokens += total_tokens
                 stats.llm_call_count += 1
                 stats.message_count = len(messages)
+
+                # 可观测性：记录 token 事件（按节点分账）
+                if event_store is not None:
+                    try:
+                        await event_store.put(
+                            thread_id=thread_id,
+                            run_id=run_id,
+                            event_type="token",
+                            category="trace",
+                            metadata={
+                                "node": node_name,
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "total_tokens": total_tokens,
+                            },
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning("写入 token 事件失败", exc_info=True)
 
                 # 优先 .content 属性
                 text = getattr(last, "content", None)
