@@ -12,3 +12,4 @@ backend/.env
 backend/.deer-flow/
 backend/.deer-flow/checkpoints.db
 backend/result_export.csv
+工具能力声明.md
