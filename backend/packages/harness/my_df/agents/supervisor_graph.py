@@ -504,22 +504,29 @@ def _make_route_after_reflection(max_routes: int) -> Callable[[ThreadState], str
 def _build_default_registry(
     app_cofig: AppConfig,
     tools: list[BaseTool] | None,
+    model: BaseChatModel | None = None,
 ) -> dict[str, tuple[SubagentConfig, CompiledStateGraph]]:
-    """构建默认子代理注册表（第一版：general-purpose assistant）。"""
+    """构建默认子代理注册表；model 为共享模型实例（None 时各工厂自建）。"""
 
     registry = {
         # 通用子代理
         GENERAL_PURPOSE_CONFIG.name: (
             GENERAL_PURPOSE_CONFIG,
             make_assistant_subagent(
-                app_cofig, config=GENERAL_PURPOSE_CONFIG, tools=tools or []
+                app_cofig,
+                config=GENERAL_PURPOSE_CONFIG,
+                tools=tools or [],
+                model=model,
             ),
         ),
         # 天气查询子代理
         WEATHER_SEARCH_CONFIG.name: (
             WEATHER_SEARCH_CONFIG,
             make_node_weather_search(
-                app_cofig, config=WEATHER_SEARCH_CONFIG, tools=tools or []
+                app_cofig,
+                config=WEATHER_SEARCH_CONFIG,
+                tools=tools or [],
+                model=model,
             ),
         ),
     }
@@ -550,15 +557,15 @@ def build_supervisor_graph(
     +        max_routes:       最大委派/评审轮次，防止 supervisor 循环。
     +"""
 
-    supervisor_model = create_chat_model(
-        name=None, thinking_enable=False, app_config=app_config, attach_tracing=False
-    ).bind_tools([route_to_agent])
-
-    review_model = create_chat_model(
+    # 共享一个模型实例：supervisor（bind 工具）/ review / 子代理复用，
+    # 避免重复创建 3 个 LLM 客户端
+    base_model = create_chat_model(
         name=None, thinking_enable=False, app_config=app_config, attach_tracing=False
     )
+    supervisor_model = base_model.bind_tools([route_to_agent])
+    review_model = base_model
 
-    registry = _build_default_registry(app_config, tools)
+    registry = _build_default_registry(app_config, tools, model=base_model)
     registry_desc = "\n".join(
         f"-{name}: {cfg.description}" for name, (cfg, _) in registry.items()
     )

@@ -2,6 +2,7 @@ import logging
 
 from langchain.agents import create_agent
 from langchain.tools import BaseTool
+from langchain_core.language_models import BaseChatModel
 from my_df.agents.thread_state import ThreadState
 from my_df.config.app_config import AppConfig
 from my_df.config.subagent_config import SubagentConfig
@@ -76,21 +77,25 @@ def make_assistant_subagent(
     *,
     config: SubagentConfig | None = None,
     tools: list[BaseTool] | None = None,
+    model: BaseChatModel | None = None,
 ):
     """根据 SubagentConfig 构建子代理图。
 
     - model：配置为 ``"inherit"``（或 None）时使用默认模型；否则按名称查找模型配置。
     - system_prompt：优先使用 ``config.system_prompt``，为空时回退模块级 SYSTEM_PROMPT。
+    - model：可选共享模型实例（None 时按配置自行创建，用于 supervisor 场景复用）。
     """
     sub_config = config or GENERAL_PURPOSE_CONFIG
-    model_name = sub_config.model if sub_config.model != "inherit" else None
-    return create_agent(
-        model=create_chat_model(
+    if model is None:
+        model_name = sub_config.model if sub_config.model != "inherit" else None
+        model = create_chat_model(
             name=model_name,
             thinking_enable=False,
             app_config=app_config,
             attach_tracing=False,
-        ),
+        )
+    return create_agent(
+        model=model,
         tools=filter_tools(
             tools or [], sub_config.tools, sub_config.disallowed_tools
         ),
