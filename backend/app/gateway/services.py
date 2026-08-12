@@ -10,6 +10,7 @@ from typing import Any
 from app.gateway.deps import get_run_manager
 from fastapi import HTTPException, Request
 from my_df.agents.supervisor_graph import build_supervisor_graph
+from my_df.agents.tools.weather import search_weather
 from my_df.config.app_config import get_app_config
 from my_df.runtime.runs.manager import RunManager, RunRecord
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
@@ -79,6 +80,7 @@ async def start_run(
             store=context.store,
             milvus=getattr(request.app.state, "milvus", None),
             embedding_model=getattr(request.app.state, "embedding_model", None),
+            tools=[search_weather],
         )
     graph_input = body.input
     config = build_run_config(

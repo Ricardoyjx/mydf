@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from my_df.agents.supervisor_graph import build_supervisor_graph
+from my_df.agents.tools.weather import search_weather
 from my_df.config.app_config import get_app_config
 from my_df.runtime.embeddings.sentence import SentenceEmbeddings
 from my_df.runtime.milvus.async_provider import make_milvus_storage
@@ -127,6 +128,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 store=app.state.store,
                 milvus=app.state.milvus,
                 embedding_model=app.state.embedding_model,
+                tools=[search_weather],
             )
             logger.info("Multi-Agent Supervisor 图已预热，请求时将复用该实例")
         except Exception:  # noqa: BLE001
