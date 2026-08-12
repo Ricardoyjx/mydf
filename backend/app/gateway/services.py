@@ -81,6 +81,7 @@ async def start_run(
             milvus=getattr(request.app.state, "milvus", None),
             embedding_model=getattr(request.app.state, "embedding_model", None),
             tools=[search_weather],
+            event_store=context.event_store,
         )
     graph_input = body.input
     config = build_run_config(
@@ -89,6 +90,8 @@ async def start_run(
         metadata=record.metadata,
         assistant_id=body.assistant_id,
     )
+    # 注入 run_id 供图内节点埋点（可观测性事件关联）
+    config.setdefault("configurable", {})["run_id"] = record.run_id
     task = asyncio.create_task(
         run_agent(
             agent_factory=agent_factory,
