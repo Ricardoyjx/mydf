@@ -57,18 +57,23 @@ SUPERVISOR_SYSTEM_PROMPT = """你是 my-df 的顶层编排者（Supervisor）。
 {registry_desc}
 
 决策规则：
-- 简单问答、闲聊、信息查询直接回答，不要委派。
-- 复杂多步任务、需要隔离上下文的任务，委派给合适的子代理。
-- 若收到质量评审反馈（reflection_feedback），根据反馈重新委派或直接补答。"""
+- 简单问答、闲聊、日常信息直接回答，不要委派。
+- 需要实时数据（天气、新闻、股票等）或专业工具的任务，必须委派给具备对应工具的子代理。
+- 若收到质量评审反馈（reflection_feedback），根据反馈重新委派或直接补答。
+
+重要纪律：
+- 一旦决定委派，必须立即调用 route_to_agent 工具完成委派，不要向用户预告。
+- 禁止只输出“我来查询”“我来帮你”之类的过渡语而不调用工具——说了要做就必须做。
+- 工具调用前不需要向用户说明，直接调用即可。"""
 
 
 @tool
 def route_to_agent(agent_name: str, task: str) -> str:
-    """把任务委派给指定子代理执行
+    """将任务委派给专业子代理执行。
+    需要实时数据（如天气）或专业能力时，必须调用此工具完成委派。
     参数：
-        agent_name: 子代理名称
-        task:       任务描述
-
+        agent_name: 子代理名称（来自可用子代理列表）
+        task:       自包含的任务描述：用户需求 + 上下文 + 期望输出
     """
     return f"委派给 {agent_name}:{task}"
 
@@ -107,6 +112,30 @@ def _last_ai_message(messages: list[Any]) -> AIMessage | None:
     return None
 
 
+def _sanitize_messages(messages: list[Any]) -> list[Any]:
+    """过滤历史中的孤儿 tool_calls 消息。
+
+    deepseek API 要求带 tool_calls 的 AIMessage 后必须有对应 ToolMessage；
+    早期版本（RemoveMessage 修复前）或子代理异常中断可能残留孤儿调用，
+    这里在每次模型调用前清洗，避免 400 invalid_request_error。
+    """
+    answered: set[str] = set()
+    for msg in messages:
+        if getattr(msg, "type", "") == "tool":
+            answered.add(str(getattr(msg, "tool_call_id", "") or ""))
+
+    cleaned: list[Any] = []
+    for msg in messages:
+        calls = getattr(msg, "tool_calls", None) or []
+        if calls and not all(str(c.get("id", "")) in answered for c in calls):
+            logger.debug(
+                "过滤孤儿 tool_calls 消息: id=%s", getattr(msg, "id", None)
+            )
+            continue
+        cleaned.append(msg)
+    return cleaned
+
+
 # ----节点实现
 
 
@@ -129,7 +158,7 @@ def _make_model_call_node(
     async def model_call_node(
         state: ThreadState, config: RunnableConfig
     ) -> dict[str, Any]:
-        messages = state.get("messages") or []
+        messages = _sanitize_messages(state.get("messages") or [])
 
         call_messages: list[AnyMessage] = [SystemMessage(content=system_prompt)]
 
@@ -140,9 +169,13 @@ def _make_model_call_node(
                 SystemMessage(
                     content=(
                         "<reflection_feedback>"
-                        "上一轮输出未通过质量评审,请据此重新委派或直接补答"
-                        f"评审意见：{feedback}"
-                        "</refleciton_feedback>"
+                        "上一轮输出未通过质量评审，请重新决策。\n"
+                        f"评审意见：{feedback}\n"
+                        "处理要求：\n"
+                        "1. 若缺失的信息需要工具/子代理获取（如实时天气、新闻等），"
+                        "必须重新调用 route_to_agent 委派对应子代理补查，不得直接结束；\n"
+                        "2. 仅当缺失内容不需要任何工具即可补齐时，才允许直接回答。"
+                        "</reflection_feedback>"
                     )
                 )
             )
@@ -213,7 +246,7 @@ def _make_supervisor_router(
                             "retry": bool(state.get("reflection_feedback")),
                         },
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.warning("写入 route 事件失败", exc_info=True)
             return update
         if target:
@@ -251,7 +284,7 @@ def _make_subagent_node(
                         "timeout_seconds": sub_config.timeout_seconds,
                     },
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("写入 subagent_start 事件失败", exc_info=True)
 
         try:
@@ -260,8 +293,12 @@ def _make_subagent_node(
                 {**config, "recursion_limit": sub_config.max_turns},
             )
             # 让 max_turns 配置真正生效：子图递归上限按子代理配置
+            clean_state = dict(state)
+            clean_state["messages"] = _sanitize_messages(
+                state.get("messages") or []
+            )
             result = await asyncio.wait_for(
-                subgraph.ainvoke(state, config=sub_config_run),
+                subgraph.ainvoke(clean_state, config=sub_config_run),
                 timeout=sub_config.timeout_seconds,
             )
             messages = result.get("messages") or []
@@ -272,9 +309,13 @@ def _make_subagent_node(
                         run_id=_event_context(config)[1],
                         event_type="subagent_end",
                         category="trace",
-                        metadata={"target": target, "status": "ok", "messages": len(messages)},
+                        metadata={
+                            "target": target,
+                            "status": "ok",
+                            "messages": len(messages),
+                        },
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.warning("写入 subagent_end 事件失败", exc_info=True)
             # 成功时清除 last_error，避免 reflect 读到上一轮失败记录误判
             return {"messages": messages, "next": None, "last_error": None}
@@ -288,7 +329,7 @@ def _make_subagent_node(
                         category="trace",
                         metadata={"target": target, "status": "timeout"},
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.warning("写入 subagent_end 事件失败", exc_info=True)
             logger.warning(
                 "子代理 %s 执行超时（%ss）", target, sub_config.timeout_seconds
@@ -307,7 +348,7 @@ def _make_subagent_node(
                         category="trace",
                         metadata={"target": target, "status": "error", "error": str(e)},
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.warning("写入 subagent_end 事件失败", exc_info=True)
             logger.exception("子代理 %s 执行失败", target)
             return {"next": None, "last_error": f"子代理{target}执行失败:{e}"}
@@ -366,6 +407,7 @@ def _make_reflection_node(
     *,
     enable_llm_review: bool,
     event_store: Any | None = None,
+    max_routes: int = MAX_ROUTES,
 ) -> StateNode:
     """构建质量评审节点：规则检查 + 可选 LLM 评审，结果写回 state。"""
 
@@ -377,7 +419,7 @@ def _make_reflection_node(
             return {
                 "reflection_passed": False,
                 "reflection_feedback": f"执行失败:{last_error}",
-                "route_count": 1,
+                "route_count": (state.get("route_count") or 0) + 1,
             }
 
         last_ai = _last_ai_message(state.get("messages", []))
@@ -393,6 +435,19 @@ def _make_reflection_node(
                 logger.warning("LLM 审核失败: %s", e)
 
         logger.info("质量评审: passed=%s, feedback=%s", passed, feedback)
+        new_count = (state.get("route_count") or 0) + 1
+        exhausted = not passed and new_count >= max_routes
+
+        update: dict[str, Any] = {
+            "reflection_passed": passed,
+            "reflection_feedback": feedback,
+            "route_count": new_count,
+        }
+        if exhausted:
+            # 达到上限仍不通过：强制结束，并标记终态原因（worker 据此判定异常）
+            update["last_error"] = (
+                f"质量评审未通过（第 {new_count} 轮）且达到上限 {max_routes}，强制结束"
+            )
 
         if event_store is not None:
             try:
@@ -404,17 +459,14 @@ def _make_reflection_node(
                     metadata={
                         "passed": passed,
                         "feedback": feedback,
-                        "round": state.get("route_count", 0),
+                        "round": new_count,
+                        "exhausted": exhausted,
                     },
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("写入 reflect 事件失败", exc_info=True)
 
-        return {
-            "reflection_passed": passed,
-            "reflection_feedback": feedback,
-            "route_count": 1,
-        }
+        return update
 
     return reflection_node
 
@@ -552,6 +604,7 @@ def build_supervisor_graph(
             review_model,
             enable_llm_review=enable_llm_review,
             event_store=event_store,
+            max_routes=max_routes,
         ),
     )
 
