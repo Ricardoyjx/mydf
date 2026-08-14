@@ -69,6 +69,10 @@ MYDF_LLM_API_KEY=your_api_key
 # 模型名称（默认 deepseek-v4-flash）
 # MYDF_LLM_MODEL=deepseek-v4-flash
 
+# 计划模式（TodoMiddleware，1 开启）
+# MYDF_IS_PLAN_MODE=0
+# MYDF_DEBUG=false
+
 # 网关
 GATEWAY_HOST=0.0.0.0
 GATEWAY_PORT=8001
@@ -78,6 +82,10 @@ MYDF_LOG_LEVEL=info
 # PostgreSQL 持久化（checkpointer + 事件流水，推荐）
 MYDF_CHECKPOINTER_TYPE=postgres
 MYDF_CHECKPOINTER_PATH=postgresql://postgres:postgres@localhost:5432/mydf
+
+# 轻量备选：SQLite（单文件，无需 Docker）
+# MYDF_CHECKPOINTER_TYPE=sqlite
+# MYDF_CHECKPOINTER_PATH=.deer-flow/checkpoints.db
 
 # Embedding 模型（RAG / 语义记忆，懒加载：首次检索时下载）
 # MYDF_EMBEDDING_MODEL=all-MiniLM-L6-v2
@@ -96,6 +104,13 @@ MYDF_CHECKPOINTER_PATH=postgresql://postgres:postgres@localhost:5432/mydf
 # 沙箱 Provider（默认本地沙箱，可替换为任意已注册类路径）
 # MYDF_SANDBOX_PROVIDER=my_df.sandbox.local_sandbox_provider.LocalSandboxProvider
 ```
+
+#### Windows（WSL2）环境注意事项
+
+1. **编码与换行**：`.env` 必须为 **UTF-8 无 BOM**，换行符建议用 **LF**（VS Code 右下角可切换；Windows 记事本保存易带 BOM/CRLF，可能引发解析异常）。
+2. **localhost 语义**：服务运行在 WSL2 内，`localhost:5432` / `localhost:19530` 指向 WSL 内 Docker 映射的 PG / Milvus——正常直连即可。**若 PG / Milvus 跑在 Windows 原生侧**，需把 DSN / host 改为 Windows 宿主 IP（`ipconfig` 查以太网 IPv4，如 `192.168.x.x`）。
+3. **局域网访问**：Windows 浏览器访问 `localhost:8001` 走 WSL2 自动转发，无需额外配置；局域网其他设备访问需 `netsh interface portproxy` 指向 WSL2 当前 IP（详见"常见问题"）。
+4. **sqlite 路径**：使用 `MYDF_CHECKPOINTER_PATH` 时建议填相对路径（如 `.deer-flow/checkpoints.db`），避免 Windows 风格反斜杠在 DSN 解析时被转义。
 
 ### 3. 启动基础设施（可选）
 
