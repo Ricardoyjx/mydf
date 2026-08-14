@@ -7,6 +7,7 @@ import logging
 import os
 from typing import cast
 
+from my_df.config.sandbox_config import SandboxConfig, load_sandbox_config_from_env
 from pydantic import BaseModel, Field
 
 from my_df.config.checkpointer_config import CheckpointerConfig, CheckpointerType
@@ -59,6 +60,11 @@ class AppConfig(BaseModel):
     reranker: RerankConfig = Field(
         default_factory=RerankConfig,
         description="Rerank 模型配置",
+    )
+
+    sandbox: SandboxConfig = Field(
+        default_factory=SandboxConfig,
+        description="Sandbox configuration",
     )
 
 
@@ -143,6 +149,7 @@ def get_app_config() -> AppConfig:
         embedding=load_embedding_config_from_env(),
         milvus=load_milvus_config_from_env(),
         reranker=load_rerank_config_from_env(),
+        sandbox=load_sandbox_config_from_env(),
     )
 
     logger.info(

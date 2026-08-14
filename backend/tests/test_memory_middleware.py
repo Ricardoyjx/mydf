@@ -220,7 +220,7 @@ class TestMemoryMiddlewareIntegration:
         """完整流程：写 memory → abefore_model 读到 → aafter_model 更新"""
         from my_df.agents.middlewares.memory_middleware import MemoryMiddleware as MW
         from my_df.agents.memory.storage import FileMemoryStorage
-        from my_df.config.path import get_paths
+        from my_df.config.paths import get_paths
 
         storage = FileMemoryStorage()
         user_id = "intg_test_user"
