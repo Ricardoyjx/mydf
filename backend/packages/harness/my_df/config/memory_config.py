@@ -19,8 +19,8 @@ class MemoryConfig(BaseModel):
             "(all users share the same file). "
             "Relative paths are resolved against `Paths.base_dir` "
             "(not the backend working directory). "
-            "Note: if you previously set this to `.deer-flow/memory.json`, "
-            "the file will now be resolved as `{base_dir}/.deer-flow/memory.json`; "
+            "Note: if you previously set this to `.my_df/memory.json`, "
+            "the file will now be resolved as `{base_dir}/.my_df/memory.json`; "
             "migrate existing data or use an absolute path to preserve the old location."
         ),
     )

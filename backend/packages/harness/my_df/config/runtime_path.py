@@ -24,7 +24,7 @@ def runtime_home() -> Path:
     """Return the writable my-df state directory."""
     if env_home := os.getenv("MYDF_HOME"):
         return Path(env_home).resolve()
-    return project_root() / ".deer-flow"
+    return project_root() / ".my_df"
 
 
 def resolve_path(value: str | os.PathLike[str], *, base: Path | None = None) -> Path:

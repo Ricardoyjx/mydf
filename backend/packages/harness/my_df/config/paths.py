@@ -39,7 +39,7 @@ def _join_host_path(base: str, *parts: str) -> str:
     """Join host filesystem path segments while preserving native style.
 
     Docker Desktop on Windows expects bind mount sources to stay in Windows
-    path form (for example ``C:\\repo\\backend\\.deer-flow``).  Using
+    path form (for example ``C:\\repo\\backend\\.my_df``).  Using
     ``Path(base) / ...`` on a POSIX host can accidentally rewrite those paths
     with mixed separators, so this helper preserves the original style.
     """
@@ -86,7 +86,7 @@ class Paths:
     BaseDir resolution (in priority order):
         1. Constructor argument `base_dir`
         2. MYDF_HOME environment variable
-        3. Caller project fallback: `{project_root}/.deer-flow`
+        3. Caller project fallback: `{project_root}/.my_df`
     """
 
     def __init__(self, base_dir: str | Path | None = None) -> None:

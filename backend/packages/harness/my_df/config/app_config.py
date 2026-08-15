@@ -111,7 +111,7 @@ def _build_checkpointer_config() -> CheckpointerConfig | None:
 
     return CheckpointerConfig(
         type=cast("CheckpointerType", raw),
-        connection_string=conn_str or ".deer-flow/checkpoints.db",
+        connection_string=conn_str or ".my_df/checkpoints.db",
     )
 
 
