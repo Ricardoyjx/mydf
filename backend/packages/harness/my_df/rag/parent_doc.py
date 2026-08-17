@@ -22,7 +22,7 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from langchain_community.retrievers import ParentDocumentRetriever
+from langchain_classic.retrievers import ParentDocumentRetriever
 from langchain_core.documents import Document
 from langchain_core.stores import BaseStore, InMemoryStore
 from langchain_core.vectorstores import VectorStore
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class ParagraphTextSplitter(TextSplitter):
     """把项目既有段落优先分块器适配为 langchain TextSplitter。"""
 
-    def init(self, chunk_size: int = 200, chunk_overlap: int = 20) -> None:
+    def __init__(self, chunk_size: int = 200, chunk_overlap: int = 20) -> None:
         if chunk_size <= 0:
             raise ValueError("chunk_size 必须大于 0")
         if chunk_overlap < 0:
@@ -66,7 +66,7 @@ class MilvusVectorStore(VectorStore):
         storage: MilvusStorage,
         embedding: Any,
         *,
-        user_id: str = "defalut",
+        user_id: str = "default",
         agent_name: str = "default",
         content_type: str = "knowledge",
     ) -> None:
@@ -177,6 +177,7 @@ def _run_sync(coro: Any, caller: str) -> Any:
 class ScoredParentDocumentRetriever(ParentDocumentRetriever):
     """保留子块相似度分数的 ParentDocumentRetriever 增强版。"""
 
+    id_key: str = "parent_id"
     _namespace: str = PrivateAttr(default="default")
 
     def _parent_key(self, parent_id: str) -> str:
@@ -208,7 +209,7 @@ class ScoredParentDocumentRetriever(ParentDocumentRetriever):
         for key, doc in zip((k for k, _ in full_docs), documents):
             for child in self.child_splitter.split_documents([doc]):
                 child.metadata = dict(child.metadata or {})
-                child.metadata[self._id_key] = key
+                child.metadata[self.id_key] = key
                 child_docs.append(child)
         if child_docs:
             await self.vectorstore.aadd_documents(child_docs)
@@ -235,7 +236,7 @@ class ScoredParentDocumentRetriever(ParentDocumentRetriever):
         best: dict[str, tuple[float, Document]] = {}
 
         for sub in sub_docs:
-            key = (sub.metadata or {}).get(self._id_key)
+            key = (sub.metadata or {}).get(self.id_key)
             if not key:
                 continue
             score = float((sub.metadata or {}).get("score") or 0.0)
@@ -245,7 +246,7 @@ class ScoredParentDocumentRetriever(ParentDocumentRetriever):
         if not best:
             return []
 
-        parent_docs = await self.docstore.amet(list(best.keys()))
+        parent_docs = await self.docstore.amget(list(best.keys()))
         result: list[Document] = []
         for key, parent in zip(best.keys(), parent_docs):
             if parent is None:

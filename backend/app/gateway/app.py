@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             milvus=milvus,
             embedding=app.state.embedding_model,
             reranker=app.state.reranker,
-            small_to_big=os.getenv("MYDF_SMALL_TO_BIG") == "true",
+            small_to_big=os.getenv("MYDF_RAG_SMALL_TO_BIG") == "true",
             docstore=rag_docstore,
         )
         logger.info(
