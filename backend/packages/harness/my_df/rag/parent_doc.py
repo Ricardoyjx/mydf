@@ -190,6 +190,14 @@ class ScoredParentDocumentRetriever(ParentDocumentRetriever):
         *,
         run_manager: Any = None,
     ) -> None:
+
+        await self._aadd_documents_with_parents(documents, ids)
+
+    async def _aadd_documents_with_parents(
+        self,
+        documents: list[Document],
+        ids: list[str] | None = None,
+    ) -> list[tuple[str, Document]]:
         """父块入库 docstore，子块向量化入库 Milvus。
 
         与官方实现差异：每个父块生成唯一 uuid 作为 parent_id，子块 metadata
@@ -213,6 +221,8 @@ class ScoredParentDocumentRetriever(ParentDocumentRetriever):
                 child_docs.append(child)
         if child_docs:
             await self.vectorstore.aadd_documents(child_docs)
+
+        return full_docs
 
     def add_documents(
         self,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from pymilvus import (
@@ -35,6 +36,7 @@ class PyMilvusStorage(MilvusStorage):
     def __init__(self, config: MilvusConfig | None = None) -> None:
         self._config = config or MilvusConfig()
         self._client: MilvusClient | None = None
+        self._last_health_check: float | None = None
         logger.info(
             "PyMilvusStorage 初始化: host=%s, port=%s, dim=%s, index=%s",
             self._config.host,
@@ -91,6 +93,28 @@ class PyMilvusStorage(MilvusStorage):
             ),
         )
         return index_params
+
+    async def _ensure_connected(self) -> MilvusClient:
+        """确保客户端可用；channel 断开时自动重连（5 秒健康检查缓存）。"""
+        now = time.monotonic()
+        if (
+            self._client is not None
+            and self._last_health_check is not None
+            and now - self._last_health_check < 5.0
+        ):
+            return self._client
+
+        if self._client is None:
+            await self.connect()
+        else:
+            try:
+                self._client.get_server_version()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Milvus 连接已断开，自动重连: %s", e)
+                self._client = None
+                await self.connect()
+        self._last_health_check = time.monotonic()
+        return self._client
 
     def _ensure_client(self) -> MilvusClient:
         """返回当前客户端，如果未连接则抛出异常。"""
@@ -189,7 +213,7 @@ class PyMilvusStorage(MilvusStorage):
 
     async def ensure_collection(self, user_id: str) -> None:
         """确保用户集合已创建（含 Schema 和索引）。"""
-        client = self._ensure_client()
+        client = await self._ensure_connected()
         name = self._collection_name(user_id)
 
         try:
@@ -245,7 +269,7 @@ class PyMilvusStorage(MilvusStorage):
 
     async def drop_collection(self, user_id: str) -> None:
         """删除指定用户的集合（危险操作！）。"""
-        client = self._ensure_client()
+        client = await self._ensure_connected()
         name = self._collection_name(user_id)
         try:
             client.drop_collection(name)
@@ -265,7 +289,7 @@ class PyMilvusStorage(MilvusStorage):
         content_type: str = "conversation",
         metadata: dict[str, Any] | None = None,
     ) -> int:
-        client = self._ensure_client()
+        client = await self._ensure_connected()
         name = self._collection_name(user_id)
 
         from datetime import UTC, datetime
@@ -304,7 +328,7 @@ class PyMilvusStorage(MilvusStorage):
         agent_name: str | None = None,
         content_type: str | None = None,
     ) -> list[SearchResult]:
-        client = self._ensure_client()
+        client = await self._ensure_connected()
         name = self._collection_name(user_id)
 
         expr = self._build_filter_expr(user_id, agent_name, content_type)
@@ -358,7 +382,7 @@ class PyMilvusStorage(MilvusStorage):
         offset: int = 0,
     ) -> list[SearchResult]:
         """按过滤条件列出向量记录，供知识库管理接口使用。"""
-        client = self._ensure_client()
+        client = await self._ensure_connected()
         name = self._collection_name(user_id)
         if not client.has_collection(name):
             return []
@@ -404,7 +428,7 @@ class PyMilvusStorage(MilvusStorage):
         if not ids:
             return 0
 
-        client = self._ensure_client()
+        client = await self._ensure_connected()
         name = self._collection_name(user_id)
         try:
             res = client.delete(collection_name=name, ids=list(ids))
@@ -442,7 +466,7 @@ class PyMilvusStorage(MilvusStorage):
 
     async def delete_by_filter(self, user_id: str, expr: str) -> int:
         """按表达式删除记录。"""
-        client = self._ensure_client()
+        client = await self._ensure_connected()
         name = self._collection_name(user_id)
 
         try:
@@ -458,7 +482,7 @@ class PyMilvusStorage(MilvusStorage):
 
     async def count(self, user_id: str) -> int:
         """统计指定用户集合中的记录总数。"""
-        client = self._ensure_client()
+        client = await self._ensure_connected()
         name = self._collection_name(user_id)
 
         try:

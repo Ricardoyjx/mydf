@@ -17,6 +17,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+from langchain_core.documents import Document
 
 from my_df.rag.chunker import split_text
 from my_df.rag.parent_doc import (
@@ -173,6 +174,15 @@ class KnowledgeService:
         if not text:
             raise ValueError("文档内容不能为空")
 
+        if self._small_to_big and self._docstore is not None:
+            return await self._add_text_small_to_big(
+                user_id=user_id,
+                title=title,
+                content=text,
+                source=source,
+                metadata=metadata,
+            )
+
         await self._milvus.ensure_collection(user_id)
         chunks = split_text(
             text,
@@ -225,6 +235,53 @@ class KnowledgeService:
         )
         return saved
 
+    async def _add_text_small_to_big(
+        self,
+        *,
+        user_id: str,
+        title: str,
+        content: str,
+        source: str = "manual",
+        metadata: dict[str, Any] | None = None,
+    ) -> list[KnowledgeChunk]:
+
+        await self._milvus.ensure_collection(user_id)
+        document_id = uuid.uuid4().hex
+        doc_meta: dict[str, Any] = {
+            "document_id": document_id,
+            "title": title,
+            "source": source,
+        }
+
+        if metadata:
+            doc_meta.update(metadata)
+
+        retriever = self._build_retriever(user_id=user_id, recall_k=4)
+        parent_docs = await retriever._aadd_documents_with_parents(
+            [Document(page_content=content, metadata=doc_meta)]
+        )
+
+        saved = [
+            KnowledgeChunk(
+                id=0,
+                document_id=document_id,
+                title=title,
+                source=source,
+                chunk_index=index,
+                text=parent.page_content,
+            )
+            for index, (_, parent) in enumerate(parent_docs)
+        ]
+
+        logger.info(
+            "知识库文档已入库(small-to-big): user=%s, doc=%s, title=%s, parents=%d",
+            user_id,
+            document_id,
+            title,
+            len(saved),
+        )
+        return saved
+
     async def search(
         self,
         *,
@@ -241,6 +298,26 @@ class KnowledgeService:
                        ``None`` 表示不过滤。
         """
         await self._milvus.ensure_collection(user_id)
+
+        if self._small_to_big and self._docstore is not None:
+            retriever = self._build_retriever(
+                user_id=user_id, recall_k=top_k * 4, agent_name=agent_name
+            )
+            docs = await retriever._aget_relevant_documents(query)
+            result = [
+                SearchResult(
+                    id=0,
+                    score=float(doc.metadata.get("score") or 0.0),
+                    text=doc.page_content,
+                    content_type=self._content_type,
+                    agent_name=agent_name or self._agent_name or "default",
+                    metadata=doc.metadata,
+                )
+                for doc in docs
+            ]
+            # 复用下方 rerank / min_score / top_k 逻辑
+            return await self._finalize_search(result, query, top_k, min_score)
+
         query_vector = await self._embedding.encode(query)
 
         """粗召回tok——p * 4 数据"""
@@ -252,6 +329,16 @@ class KnowledgeService:
             content_type=self._content_type,
         )
 
+        return await self._finalize_search(result, query, top_k, min_score)
+
+    async def _finalize_search(
+        self,
+        result: list[SearchResult],
+        query: str,
+        top_k: int,
+        min_score: float | None,
+    ) -> list[SearchResult]:
+        """rerank + 最低分过滤 + top_k 截断（small-to-big 与旧路径共用）。"""
         if self._rerank is not None:
             try:
                 await self._rerank.ensure_loaded()
@@ -323,4 +410,26 @@ class KnowledgeService:
         ]
         if not ids:
             return 0
-        return await self._milvus.delete_by_ids(user_id, ids)
+        deleted = await self._milvus.delete_by_ids(user_id, ids)
+
+        if self._small_to_big and self._docstore is not None:
+            deleted += await self._delete_parent_docs(user_id, document_id)
+        return deleted
+
+    async def _delete_parent_docs(self, user_id: str, document_id: str) -> int:
+        """按 user_id + document_id 删除 docstore 中的父块。"""
+        store = self._docstore
+        keys = [k async for k in store.ayield_keys(prefix=f"{user_id}:")]
+        if not keys:
+            return 0
+        docs = await store.amget(keys)
+        to_delete = [
+            key
+            for key, doc in zip(keys, docs)
+            if doc is not None
+            and str((doc.metadata or {}).get("document_id", "")) == document_id
+        ]
+        if not to_delete:
+            return 0
+        await store.amdelete(to_delete)
+        return len(to_delete)
