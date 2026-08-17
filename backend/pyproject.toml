@@ -17,6 +17,8 @@ dependencies = [
     "pymilvus>=3.0.0",
     "sentence-transformers>=3.0.0",
     "langchain-deepseek>=1.1.0",
+    "langchain-community>=0.4.2",
+    "langchain-text-splitters>=1.1.2",
 ]
 
 [tool.uv.workspace]
