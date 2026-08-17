@@ -21,6 +21,8 @@ from fastapi.responses import FileResponse
 from my_df.agents.supervisor_graph import build_supervisor_graph
 from my_df.agents.tools.weather import search_weather
 from my_df.config.app_config import get_app_config
+from my_df.rag.parent_doc import make_parent_docstore
+from my_df.rag.service import KnowledgeService
 from my_df.runtime.embeddings.sentence import SentenceEmbeddings
 from my_df.runtime.milvus.async_provider import make_milvus_storage
 from my_df.runtime.reranker.sentence import SentenceRerank
@@ -112,6 +114,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("Reranker 未启用（MYDF_RERANK_ENABLED=true 可开启精排）")
         app.state.reranker = None
 
+    # 5.5 small_to_big 父块 docstore + 共享 knowledgeService
+    try:
+        rag_docstore = await make_parent_docstore(startup_config.checkpointer)
+        app.state.rag_docstore = rag_docstore
+        app.state.knowledge_service = KnowledgeService(
+            milvus=milvus,
+            embedding=app.state.embedding_model,
+            reranker=app.state.reranker,
+            small_to_big=os.getenv("MYDF_SMALL_TO_BIG") == "true",
+            docstore=rag_docstore,
+        )
+        logger.info(
+            "RAG KnowledgeService 已就绪: small_to_big=%s",
+            app.state.knowledge_service.small_to_big_enabled,
+        )
+    except Exception:
+        logger.exception("RAG docstore 初始化失败，small_to_big 不可用")
+        app.state.rag_docstore = None
+        app.state.knowledge_service = None
+
     # 6. 初始化 LangGraph 运行时（stream bridge、checkpointer 等）
     async with langgraph_runtime(app, startup_config):
         logger.info("LangGraph 运行时初始化完成")
@@ -135,6 +157,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # 清理 Milvus 连接（在 langgraph_runtime 关闭后）
     await _milvus_stack.aclose()
+
+    rag_docstore = getattr(app.state, "rag_docstore", None)
+    if rag_docstore is not None and hasattr(rag_docstore, "aclose"):
+        await rag_docstore.aclose()
 
     # 释放本地模型（embedding / reranker），避免 reload 旧进程残留
     embedder = getattr(app.state, "embedding_model", None)

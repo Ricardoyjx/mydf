@@ -80,6 +80,7 @@ async def start_run(
             store=context.store,
             milvus=getattr(request.app.state, "milvus", None),
             embedding_model=getattr(request.app.state, "embedding_model", None),
+            knowledge_service=getattr(request.app.state, "knowledge_service", None),
             tools=[search_weather],
             event_store=context.event_store,
         )

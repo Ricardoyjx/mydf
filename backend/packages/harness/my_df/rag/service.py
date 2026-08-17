@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from my_df.rag.chunker import split_text
+from my_df.rag.parent_doc import (
+    MilvusVectorStore,
+    ParagraphTextSplitter,
+    ScoredParentDocumentRetriever,
+)
 from my_df.runtime.milvus.base import MilvusStorage, SearchResult
 from my_df.runtime.reranker.sentence import SentenceRerank
 
@@ -54,9 +59,7 @@ def _extract_docx_text(raw: bytes) -> str:
     paragraphs = re.findall(r"<w:p(?: [^>]*)?>.*?</w:p>", xml, re.DOTALL)
     lines: list[str] = []
     for paragraph in paragraphs:
-        text = "".join(
-            re.findall(r"<w:t(?: [^>]*)?>(.*?)</w:t>", paragraph, re.DOTALL)
-        )
+        text = "".join(re.findall(r"<w:t(?: [^>]*)?>(.*?)</w:t>", paragraph, re.DOTALL))
         text = html.unescape(text).strip()
         if text:
             lines.append(text)
@@ -97,6 +100,11 @@ class KnowledgeService:
         chunk_size: int = 800,
         chunk_overlap: int = 100,
         content_type: str = "knowledge",
+        small_to_big: bool = False,
+        docstore: Any = None,
+        child_chunk_size: int = 200,
+        parent_chunk_size: int = 1000,
+        child_chunk_overlap: int = 20,
     ) -> None:
         self._milvus = milvus
         self._embedding = embedding
@@ -105,6 +113,49 @@ class KnowledgeService:
         self._chunk_overlap = chunk_overlap
         self._content_type = content_type
         self._rerank = reranker
+        self._small_to_big = small_to_big
+        self._docstore = docstore
+        self._child_chunk_size = child_chunk_size
+        self._parent_chunk_size = parent_chunk_size
+        self._child_chunk_overlap = child_chunk_overlap
+
+    @property
+    def small_to_big_enabled(self) -> bool:
+        return self._small_to_big
+
+    def _build_retriever(
+        self,
+        user_id: str,
+        recall_k: int,
+        agent_name: str | None = None,
+    ) -> ScoredParentDocumentRetriever:
+        """创建ParentDocumentRetriever"""
+        vectorstroe = MilvusVectorStore(
+            self._milvus,
+            self._embedding,
+            user_id=user_id,
+            agent_name=agent_name or self._agent_name or "default",
+            content_type=self._content_type,
+        )
+
+        child_splitter = ParagraphTextSplitter(
+            chunk_size=self._child_chunk_size, chunk_overlap=self._child_chunk_overlap
+        )
+
+        parent_splitter = ParagraphTextSplitter(
+            chunk_size=self._parent_chunk_size, chunk_overlap=self._child_chunk_overlap
+        )
+
+        retriever = ScoredParentDocumentRetriever(
+            vectorstore=vectorstroe,
+            docstore=self._docstore,
+            child_splitter=child_splitter,
+            parent_splitter=parent_splitter,
+            search_kwargs={"k": recall_k},
+        )
+
+        retriever._namespace = user_id
+        return retriever
 
     async def add_text(
         self,

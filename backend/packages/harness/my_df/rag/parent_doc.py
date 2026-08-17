@@ -71,29 +71,89 @@ class MilvusVectorStore(VectorStore):
         content_type: str = "knowledge",
     ) -> None:
         super().__init__()
-        self.storage = storage
-        self.embedding = embedding
-        self.user_id = user_id
-        self.agent_name = (agent_name or "default").replace("_", "-")
-        self.content_type = content_type
+        self._storage = storage
+        self._embedding = embedding
+        self._user_id = user_id
+        self._agent_name = (agent_name or "default").replace("_", "-")
+        self._content_type = content_type
 
-    # async def aadd_texts() -> list[str]:
-    #     pass
+    async def aadd_texts(
+        self,
+        texts: Sequence[str],
+        metadatas: list[dict[str, Any]] | None = None,
+        *,
+        ids: list[str] | None = None,
+        **kwargs,
+    ) -> list[str]:
+        vectors = await self._embedding.encode_batch(list(texts))
+        if len(vectors) != len(texts):
+            raise RuntimeError("向量化结果数量与输入数量不一致")
+        saved: list[str] = []
 
-    # def add_texts() -> list[str]:
-    #     pass
+        for index, (text, vector) in enumerate(zip(texts, vectors)):
+            meta = (
+                dict(metadatas[index]) if metadatas and index < len(metadatas) else {}
+            )
+            inserted_id = await self._storage.insert(
+                user_id=self._user_id,
+                agent_name=self._agent_name,
+                text=text,
+                vector=vector,
+                content_type=self._content_type,
+                metadata=meta,
+            )
+            saved.append(str(inserted_id))
+        return saved
 
-    # async def asimilarity_search() -> list[Document]:
-    #     pass
+    def add_texts(
+        self,
+        texts: Sequence[str],
+        metadatas: list[dict[str, Any]] | None = None,
+        *,
+        ids: list[str] | None = None,
+        **kwargs: Any,
+    ) -> list[str]:
+        return _run_sync(
+            self.aadd_texts(texts, metadatas, ids=ids, **kwargs),
+            "MilvusVectorStore.add_texts",
+        )
 
-    # def similarity_search() -> list[Document]:
-    #     pass
+    async def asimilarity_search(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> list[Document]:
+        query_vector = await self._embedding.encode(query)
+        results = await self._storage.search(
+            user_id=self._user_id,
+            query_vector=query_vector,
+            top_k=k,
+            agent_name=self._agent_name,
+            content_type=self._content_type,
+        )
 
-    # async def adelete() -> bool:
-    #     pass
+        docs: list[Document] = []
+        for result in results:
+            meta = dict(result.metadata or [])
+            meta["score"] = float(result.score)
+            docs.append(Document(page_content=result.text, metadata=meta))
+        return docs
+
+    def similarity_search(self, query: str, k=4, **kwargs) -> list[Document]:
+        return _run_sync(
+            self.asimilarity_search(query, k, **kwargs),
+            "MilvusVectorStore.similarity_search",
+        )
+
+    async def adelete(self, ids: list[str] | None = None, **kwargs: Any) -> bool:
+        if not ids:
+            return True
+        int_ids = [int(i) for i in ids if str(i).isdigit()]
+        if not int_ids:
+            return True
+        deleted = await self._storage.delete_by_ids(self._user_id, int_ids)
+        return deleted == len(int_ids)
 
     @classmethod
-    def from_text(
+    def from_texts(
         cls,
         texts: list[str],
         embedding: Any,

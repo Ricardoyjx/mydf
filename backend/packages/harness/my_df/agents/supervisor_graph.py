@@ -147,6 +147,7 @@ def _make_model_call_node(
     store: BaseStore | None = None,
     milvus: MilvusStorage | None = None,
     embedding_model: Any | None = None,
+    knowledge_service: Any | None = None,
     system_prompt: str | None = None,
 ) -> StateNode:
     """构建 supervisor LLM 调用节点。
@@ -176,6 +177,7 @@ def _make_model_call_node(
                 user_id=user_id,
                 milvus=milvus,
                 embedding_model=embedding_model,
+                knowledge_service=knowledge_service,
             ),
         )
         for mw in context_middlewares:
@@ -572,6 +574,7 @@ def build_supervisor_graph(
     store: BaseStore | None = None,
     milvus: MilvusStorage | None = None,
     embedding_model: Any | None = None,
+    knowledge_service: Any | None = None,
     tools: list[BaseTool] | None = None,
     enable_llm_review: bool = True,
     max_routes: int = MAX_ROUTES,
@@ -627,6 +630,7 @@ def build_supervisor_graph(
             store=store,
             milvus=milvus,
             embedding_model=embedding_model,
+            knowledge_service=knowledge_service,
             system_prompt=system_prompt,
         ),
     )

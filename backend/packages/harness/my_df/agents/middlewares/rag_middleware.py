@@ -62,6 +62,7 @@ class RagMiddleware(AgentMiddleware):
         user_id: str = "default",
         milvus: MilvusStorage | None = None,
         embedding_model: Any | None = None,
+        knowledge_service: Any | None = None,
         *,
         top_k: int = 5,
         min_score: float = 0.3,
@@ -70,6 +71,7 @@ class RagMiddleware(AgentMiddleware):
         self._user_id = user_id
         self._milvus = milvus
         self._embedding = embedding_model
+        self._knowledge_service = knowledge_service
         self._top_k = top_k
         self._min_score = min_score
 
@@ -102,6 +104,22 @@ class RagMiddleware(AgentMiddleware):
                 top_k=self._top_k,
                 content_type="knowledge",
             )
+            # 兼容旧版知识库
+            if self._knowledge_service is not None:
+                results = await self._knowledge_service.search(
+                    user_id=self._user_id,
+                    query=user_text,
+                    top_k=self._top_k,
+                    min_score=self._min_score,
+                )
+            else:
+                query_vector = await self._embedding.encode(user_text)
+                results = await self._milvus.search(
+                    user_id=self._user_id,
+                    query_vector=query_vector,
+                    top_k=self._top_k,
+                    content_type="knowledge",
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning("RAG 语义检索失败: %s", e)
             return None
