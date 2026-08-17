@@ -19,8 +19,8 @@ splitter / invoke），只修复上述两点。
 import asyncio
 import logging
 import uuid
-from collections.abc import Sequence
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from typing import Any
 
 from langchain_community.retrievers import ParentDocumentRetriever
 from langchain_core.documents import Document
