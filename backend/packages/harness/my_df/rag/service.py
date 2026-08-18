@@ -17,6 +17,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
 from langchain_core.documents import Document
 
 from my_df.rag.chunker import split_text
