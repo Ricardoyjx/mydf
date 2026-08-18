@@ -39,9 +39,7 @@ class BM25Index:
     def _tokenize(text: str) -> list[str]:
         """jieba 分词，剔除空白符，统一小写。"""
         return [
-            token.strip().lower()
-            for token in jieba.cut(text or "")
-            if token.strip()
+            token.strip().lower() for token in jieba.cut(text or "") if token.strip()
         ]
 
     def _rebuild_locked(self) -> None:
@@ -77,9 +75,7 @@ class BM25Index:
             self._corpus = [toks for _, toks in kept]
             removed = before - len(self._docs)
             if removed:
-                self._id_to_pos = {
-                    doc.id: i for i, doc in enumerate(self._docs)
-                }
+                self._id_to_pos = {doc.id: i for i, doc in enumerate(self._docs)}
                 self._rebuild_locked()
             return removed
 
@@ -87,9 +83,7 @@ class BM25Index:
         """全量重建（启动后首次使用 / 数据不一致兜底）。"""
         with self._lock:
             self._docs = list(records)
-            self._id_to_pos = {
-                doc.id: i for i, doc in enumerate(self._docs)
-            }
+            self._id_to_pos = {doc.id: i for i, doc in enumerate(self._docs)}
             self._rebuild_locked()
 
     def search(self, query: str, top_k: int = 10) -> list[SearchResult]:
