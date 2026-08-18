@@ -107,6 +107,7 @@ class KnowledgeService:
         child_chunk_size: int = 200,
         parent_chunk_size: int = 1000,
         child_chunk_overlap: int = 20,
+        rrf_enabled: bool = False,
     ) -> None:
         self._milvus = milvus
         self._embedding = embedding
@@ -120,10 +121,15 @@ class KnowledgeService:
         self._child_chunk_size = child_chunk_size
         self._parent_chunk_size = parent_chunk_size
         self._child_chunk_overlap = child_chunk_overlap
+        self._rrf_enabled = rrf_enabled
 
     @property
     def small_to_big_enabled(self) -> bool:
         return self._small_to_big
+
+    @property
+    def rrf_enabled(self) -> bool:
+        return self._rrf_enabled
 
     def _build_retriever(
         self,

@@ -1,6 +1,7 @@
 """RAG 知识库 API：文档入库、列表、语义检索与删除。"""
 
 import base64
+import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -86,7 +87,14 @@ def _get_knowledge_service(request: Request) -> KnowledgeService:
             status_code=503,
             detail="RAG 不可用：Milvus 或 Embedding 模型未初始化",
         )
-    return KnowledgeService(milvus, embedding, reranker)
+    return KnowledgeService(
+        milvus,
+        embedding,
+        reranker,
+        small_to_big=os.getenv("MYDF_RAG_SMALL_TO_BIG") == "true",
+        docstore=getattr(request.app.state, "rag_docstore", None),
+        rrf_enabled=os.getenv("MYDF_RAG_RRF_ENABLED") == "true",
+    )
 
 
 @router.post("/documents", summary="文本方式入库文档")

@@ -124,10 +124,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             reranker=app.state.reranker,
             small_to_big=os.getenv("MYDF_RAG_SMALL_TO_BIG") == "true",
             docstore=rag_docstore,
+            rrf_enabled=os.getenv("MYDF_RAG_RRF_ENABLED") == "true",
         )
         logger.info(
-            "RAG KnowledgeService 已就绪: small_to_big=%s",
+            "RAG KnowledgeService 已就绪: small_to_big=%s, rrf=%s",
             app.state.knowledge_service.small_to_big_enabled,
+            app.state.knowledge_service.rrf_enabled,
         )
     except Exception:
         logger.exception("RAG docstore 初始化失败，small_to_big 不可用")
