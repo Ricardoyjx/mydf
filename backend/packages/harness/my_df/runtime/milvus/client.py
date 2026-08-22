@@ -149,6 +149,7 @@ class PyMilvusStorage(MilvusStorage):
                 self._client = None
                 await self.connect()
         self._last_health_check = time.monotonic()
+        assert self._client is not None
         return self._client
 
     def _ensure_client(self) -> MilvusClient:
@@ -479,7 +480,7 @@ class PyMilvusStorage(MilvusStorage):
         logger.debug("BM25 关键词搜索完成: user=%s, hits=%d", user_id, len(parsed))
         return parsed
 
-    def _collection_has_bm25(self, client: MilvusClient, name: str) -> bool:
+    async def _collection_has_bm25(self, client: MilvusClient, name: str) -> bool:
         """判断集合是否具备 BM25 全文检索能力（结果按集合缓存）。"""
         if name in self._bm25_ready:
             return True
@@ -487,7 +488,7 @@ class PyMilvusStorage(MilvusStorage):
             return False
 
         try:
-            desc = client.describe_collection(name)
+            desc = await client.describe_collection(name)
             fields = desc.get("fields", [])
             functions = desc.get("functions", []) or []
             has_sparse = any(f.get("name") == "sparse" for f in fields)
