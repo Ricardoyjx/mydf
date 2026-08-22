@@ -6,19 +6,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
-import json
-import uuid
 
 import httpx
 import pytest
-
 from app.gateway.app import create_app
 from my_df.runtime.runs.schema import DisconnectMode, RunStatus
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,7 +91,7 @@ class TestStreamRoute:
                     assistant_id="test-agent",
                     status=RunStatus.pending,
                     on_disconnect=DisconnectMode.cancel,
-                    created_at=datetime.now().isoformat(),
+                    created_at=datetime.now().isoformat(),  # noqa: DTZ005
                 )
                 mock_start.return_value = fake_run
 
@@ -122,9 +120,7 @@ class TestStreamRoute:
                     )
 
             assert resp.status_code == 200
-            assert (
-                resp.headers["content-type"] == "text/event-stream; charset=utf-8"
-            )
+            assert resp.headers["content-type"] == "text/event-stream; charset=utf-8"
             assert resp.headers["cache-control"] == "no-cache"
             assert "event: metadata" in resp.text
             assert "event: updates" in resp.text

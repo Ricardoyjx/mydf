@@ -334,10 +334,12 @@ async def process_chunk(
                                     "total_tokens": total_tokens,
                                 },
                             ),
-                            timeout=2,
+                            timeout=5,
                         )
-                    except Exception:  # noqa: BLE001
-                        logger.warning("写入 token 事件失败", exc_info=True)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "写入 token 事件失败: %s", e, exc_info=True
+                        )
 
                 # 优先 .content 属性
                 text = getattr(last, "content", None)

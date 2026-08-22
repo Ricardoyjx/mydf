@@ -147,6 +147,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 store=app.state.store,
                 milvus=app.state.milvus,
                 embedding_model=app.state.embedding_model,
+                knowledge_service=app.state.knowledge_service,
                 tools=[search_weather],
                 event_store=app.state.event_store,
             )

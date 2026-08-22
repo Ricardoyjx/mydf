@@ -308,6 +308,13 @@ class KnowledgeService:
         await self._milvus.ensure_collection(user_id)
 
         if self._small_to_big and self._docstore is not None:
+            logger.info(
+                "small-to-big 检索模式: user=%s, query=%r, recall_k=%d"
+                "（该模式暂不参与向量+BM25 RRF 融合）",
+                user_id,
+                query[:80],
+                top_k * 4,
+            )
             retriever = self._build_retriever(
                 user_id=user_id, recall_k=top_k * 4, agent_name=agent_name
             )
@@ -351,12 +358,33 @@ class KnowledgeService:
                 logger.warning("BM25 关键词检索失败，本次仅使用向量检索: %s", e)
                 k_results = []
 
+            logger.info(
+                "RRF 融合: user=%s, query=%r, 向量召回=%d, BM25召回=%d, k=60",
+                user_id,
+                query[:80],
+                len(e_results),
+                len(k_results),
+            )
+
             if k_results:
                 result = rrf.rrf_fuse([e_results, k_results], k=60)
+                fused_top = result[:top_k]
+                detail = ", ".join(
+                    f"#{i} id={item.id} score={item.score:.6f} "
+                    f"title={item.metadata.get('title', '')!r}"
+                    for i, item in enumerate(fused_top, start=1)
+                )
+                logger.info(
+                    "RRF 融合完成: 融合后=%d 条, Top%d=%s",
+                    len(result),
+                    len(fused_top),
+                    detail,
+                )
             else:
                 # BM25 未命中或不可用：保留向量原始分数，
                 # 避免 RRF 稀释分数导致 min_score 过滤误伤
                 result = e_results
+                logger.info("RRF 跳过融合: BM25 未命中，仅使用向量召回 %d 条", len(result))
         else:
             result = e_results
 
