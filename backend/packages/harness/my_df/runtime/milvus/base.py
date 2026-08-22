@@ -104,7 +104,7 @@ class MilvusStorage(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def search(
+    async def embedding_search(
         self,
         user_id: str,
         query_vector: list[float],
@@ -125,6 +125,28 @@ class MilvusStorage(abc.ABC):
             SearchResult 列表，按相似度降序排列。
         """
         ...
+
+    @abc.abstractmethod
+    async def bm25_search(
+        self,
+        user_id: str,
+        query: str,
+        top_k: int = 5,
+        agent_name: str | None = None,
+        content_type: str | None = None,
+    ) -> list[SearchResult]:
+        """BM25 关键词搜索（Milvus 内置全文索引）。
+
+        参数：
+            user_id:       用户标识（必填，用于隔离搜索范围）。
+            query:         查询关键词文本。
+            top_k:         返回最相关的 top_k 条结果。
+            agent_name:    可选，按 agent 名称过滤。
+            content_type:  可选，按内容类型过滤。
+
+        返回：
+            SearchResult 列表，按 BM25 相关性降序排列。
+        """
 
     @abc.abstractmethod
     async def list_records(

@@ -98,7 +98,7 @@ class RagMiddleware(AgentMiddleware):
 
         try:
             query_vector = await self._embedding.encode(user_text)
-            results = await self._milvus.search(
+            results = await self._milvus.embedding_search(
                 user_id=self._user_id,
                 query_vector=query_vector,
                 top_k=self._top_k,
@@ -114,7 +114,7 @@ class RagMiddleware(AgentMiddleware):
                 )
             else:
                 query_vector = await self._embedding.encode(user_text)
-                results = await self._milvus.search(
+                results = await self._milvus.embedding_search(
                     user_id=self._user_id,
                     query_vector=query_vector,
                     top_k=self._top_k,

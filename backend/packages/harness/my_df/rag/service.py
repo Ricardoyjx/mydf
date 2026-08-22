@@ -20,6 +20,7 @@ from typing import Any, Protocol
 
 from langchain_core.documents import Document
 
+from my_df.rag import rrf
 from my_df.rag.chunker import split_text
 from my_df.rag.parent_doc import (
     MilvusVectorStore,
@@ -327,14 +328,37 @@ class KnowledgeService:
 
         query_vector = await self._embedding.encode(query)
 
-        """粗召回tok——p * 4 数据"""
-        result = await self._milvus.search(
+        """向量检索粗召回（top_k * 4，为 rerank/融合留余量）"""
+        e_results = await self._milvus.embedding_search(
             user_id=user_id,
             query_vector=query_vector,
             top_k=top_k * 4,
             agent_name=agent_name,
             content_type=self._content_type,
         )
+
+        if self._rrf_enabled:
+            """BM25 关键词召回（第二路）"""
+            try:
+                k_results = await self._milvus.bm25_search(
+                    user_id=user_id,
+                    query=query,
+                    top_k=top_k * 4,
+                    agent_name=agent_name,
+                    content_type=self._content_type,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("BM25 关键词检索失败，本次仅使用向量检索: %s", e)
+                k_results = []
+
+            if k_results:
+                result = rrf.rrf_fuse([e_results, k_results], k=60)
+            else:
+                # BM25 未命中或不可用：保留向量原始分数，
+                # 避免 RRF 稀释分数导致 min_score 过滤误伤
+                result = e_results
+        else:
+            result = e_results
 
         return await self._finalize_search(result, query, top_k, min_score)
 

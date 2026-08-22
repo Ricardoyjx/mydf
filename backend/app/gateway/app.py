@@ -131,8 +131,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.knowledge_service.small_to_big_enabled,
             app.state.knowledge_service.rrf_enabled,
         )
-    except Exception:
-        logger.exception("RAG docstore 初始化失败，small_to_big 不可用")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("RAG docstore 初始化失败，small_to_big 不可用:%s", e)
         app.state.rag_docstore = None
         app.state.knowledge_service = None
 

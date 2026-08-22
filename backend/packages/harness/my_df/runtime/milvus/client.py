@@ -14,6 +14,8 @@ from typing import Any
 from pymilvus import (
     CollectionSchema,
     DataType,
+    Function,
+    FunctionType,
     MilvusClient,
     MilvusException,
 )
@@ -37,6 +39,8 @@ class PyMilvusStorage(MilvusStorage):
         self._config = config or MilvusConfig()
         self._client: MilvusClient | None = None
         self._last_health_check: float | None = None
+        self._bm25_ready: set[str] = set()
+        self._bm25_unavailable: set[str] = set()
         logger.info(
             "PyMilvusStorage 初始化: host=%s, port=%s, dim=%s, index=%s",
             self._config.host,
@@ -53,7 +57,13 @@ class PyMilvusStorage(MilvusStorage):
         return f"{self._config.collection_name_prefix}_{safe}"
 
     def _build_schema(self) -> CollectionSchema:
-        """构建 Collection Schema (MilvusClient 兼容)."""
+        """构建 Collection Schema (MilvusClient 兼容)。
+
+        除稠密向量外，额外声明 BM25 全文索引所需的：
+        - ``text`` 字段开启分析器（中文分词）；
+        - ``sparse`` 稀疏向量字段，由 BM25 函数自动生成；
+        - ``text_bm25_emb`` 函数：text -> sparse。
+        """
         schema = MilvusClient.create_schema(auto_id=True, enable_dynamic_field=False)
         schema.add_field(
             field_name="id", datatype=DataType.INT64, is_primary=True, auto_id=True
@@ -69,7 +79,13 @@ class PyMilvusStorage(MilvusStorage):
         schema.add_field(
             field_name="agent_name", datatype=DataType.VARCHAR, max_length=128
         )
-        schema.add_field(field_name="text", datatype=DataType.VARCHAR, max_length=65535)
+        schema.add_field(
+            field_name="text",
+            datatype=DataType.VARCHAR,
+            max_length=65535,
+            enable_analyzer=True,
+            analyzer_params={"type": "chinese"},
+        )
         schema.add_field(
             field_name="content_type", datatype=DataType.VARCHAR, max_length=64
         )
@@ -77,10 +93,19 @@ class PyMilvusStorage(MilvusStorage):
         schema.add_field(
             field_name="timestamp", datatype=DataType.VARCHAR, max_length=32
         )
+        schema.add_field(field_name="sparse", datatype=DataType.SPARSE_FLOAT_VECTOR)
+        schema.add_function(
+            Function(
+                name="text_bm25_emb",
+                input_field_names=["text"],
+                output_field_names=["sparse"],
+                function_type=FunctionType.BM25,
+            )
+        )
         return schema
 
     def _build_index_params(self) -> Any:
-        """构建索引参数。"""
+        """构建索引参数（稠密向量 + BM25 稀疏倒排）。"""
         index_params = MilvusClient.prepare_index_params()
         index_params.add_index(
             field_name="vector",
@@ -91,6 +116,16 @@ class PyMilvusStorage(MilvusStorage):
                 if self._config.index_type != "HNSW"
                 else {"M": 16, "efConstruction": 200}
             ),
+        )
+        index_params.add_index(
+            field_name="sparse",
+            index_type="SPARSE_INVERTED_INDEX",
+            metric_type="BM25",
+            params={
+                "inverted_index_algo": "DAAT_MAXSCORE",
+                "bm25_k1": 1.2,
+                "bm25_b": 0.75,
+            },
         )
         return index_params
 
@@ -271,6 +306,8 @@ class PyMilvusStorage(MilvusStorage):
         """删除指定用户的集合（危险操作！）。"""
         client = await self._ensure_connected()
         name = self._collection_name(user_id)
+        self._bm25_ready.discard(name)
+        self._bm25_unavailable.discard(name)
         try:
             client.drop_collection(name)
             logger.warning("集合已删除: %s", name)
@@ -320,7 +357,7 @@ class PyMilvusStorage(MilvusStorage):
 
     # ── 搜索操作 ──────────────────────────────────────────────────────
 
-    async def search(
+    async def embedding_search(
         self,
         user_id: str,
         query_vector: list[float],
@@ -328,6 +365,7 @@ class PyMilvusStorage(MilvusStorage):
         agent_name: str | None = None,
         content_type: str | None = None,
     ) -> list[SearchResult]:
+        """稠密向量相似度检索（IP 度量）。"""
         client = await self._ensure_connected()
         name = self._collection_name(user_id)
 
@@ -372,6 +410,101 @@ class PyMilvusStorage(MilvusStorage):
 
         logger.debug("向量搜索完成: user=%s, hits=%d", user_id, len(parsed))
         return parsed
+
+    async def bm25_search(
+        self,
+        user_id: str,
+        query: str,
+        top_k: int = 5,
+        agent_name: str | None = None,
+        content_type: str | None = None,
+    ) -> list[SearchResult]:
+        """基于 Milvus 内置 BM25 全文索引的关键词检索。
+
+        依赖集合 Schema 中的 ``text_bm25_emb`` 函数（text -> sparse）与
+        ``SPARSE_INVERTED_INDEX``（metric_type=BM25）。旧集合缺少该结构时
+        返回空列表并告警，不破坏既有向量数据。
+        """
+        client = await self._ensure_connected()
+        name = self._collection_name(user_id)
+
+        if not self._collection_has_bm25(client, name):
+            logger.warning(
+                "集合 %s 缺少 BM25 全文索引（需重建集合后重新入库），"
+                "关键词检索降级为空",
+                name,
+            )
+            return []
+
+        expr = self._build_filter_expr(user_id, agent_name, content_type)
+
+        try:
+            results = client.search(
+                collection_name=name,
+                data=[query],
+                anns_field="sparse",
+                limit=top_k,
+                search_params={"metric_type": "BM25"},
+                filter=expr,
+                output_fields=[
+                    "text",
+                    "content_type",
+                    "agent_name",
+                    "metadata",
+                    "timestamp",
+                ],
+            )
+        except MilvusException as e:
+            logger.error("BM25 关键词搜索失败 (user=%s): %s", user_id, e)
+            raise
+
+        parsed: list[SearchResult] = []
+        for hits in results:
+            for hit in hits:
+                entity = hit.get("entity", {})
+                meta = self._parse_metadata(entity.get("metadata", "{}"))
+
+                parsed.append(
+                    SearchResult(
+                        id=hit.get("id", 0),
+                        score=hit.get("distance", 0.0),
+                        text=entity.get("text", ""),
+                        content_type=entity.get("content_type", ""),
+                        agent_name=entity.get("agent_name", ""),
+                        metadata=meta,
+                        timestamp=entity.get("timestamp", ""),
+                    )
+                )
+
+        logger.debug("BM25 关键词搜索完成: user=%s, hits=%d", user_id, len(parsed))
+        return parsed
+
+    def _collection_has_bm25(self, client: MilvusClient, name: str) -> bool:
+        """判断集合是否具备 BM25 全文检索能力（结果按集合缓存）。"""
+        if name in self._bm25_ready:
+            return True
+        if name in self._bm25_unavailable:
+            return False
+
+        try:
+            desc = client.describe_collection(name)
+            fields = desc.get("fields", [])
+            functions = desc.get("functions", []) or []
+            has_sparse = any(f.get("name") == "sparse" for f in fields)
+            has_bm25_fn = any(
+                fn.get("name") == "text_bm25_emb" or fn.get("type") == "BM25"
+                for fn in functions
+            )
+            available = has_sparse and has_bm25_fn
+        except Exception as e:  # noqa: BLE001
+            logger.warning("检查集合 %s 的 BM25 能力失败: %s", name, e)
+            available = False
+
+        if available:
+            self._bm25_ready.add(name)
+        else:
+            self._bm25_unavailable.add(name)
+        return available
 
     async def list_records(
         self,

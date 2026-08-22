@@ -475,7 +475,7 @@ class MemoryMiddleware(AgentMiddleware):
             if user_text:
                 try:
                     query_vec = await self._embedding.encode(user_text)
-                    results = await self._milvus.search(
+                    results = await self._milvus.embedding_search(
                         user_id=self._user_id,
                         query_vector=query_vec,
                         top_k=10,

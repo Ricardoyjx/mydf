@@ -122,7 +122,7 @@ class MilvusVectorStore(VectorStore):
         self, query: str, k: int = 4, **kwargs: Any
     ) -> list[Document]:
         query_vector = await self._embedding.encode(query)
-        results = await self._storage.search(
+        results = await self._storage.embedding_search(
             user_id=self._user_id,
             query_vector=query_vector,
             top_k=k,

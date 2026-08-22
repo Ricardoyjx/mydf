@@ -11,7 +11,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from langchain.messages import HumanMessage
-
 from my_df.agents.middlewares.rag_middleware import RagMiddleware, _format_rag_context
 from my_df.rag.chunker import split_text
 from my_df.rag.service import KnowledgeService
@@ -25,7 +24,8 @@ class FakeMilvus:
         self.records: list[SearchResult] = []
         self._next_id = 1
         self.insert_calls: list[dict[str, Any]] = []
-        self.search_calls: list[dict[str, Any]] = []
+        self.embedding_search_calls: list[dict[str, Any]] = []
+        self.bm25_search_calls: list[dict[str, Any]] = []
 
     async def ensure_collection(self, user_id: str) -> None:
         pass
@@ -62,7 +62,7 @@ class FakeMilvus:
         self._next_id += 1
         return record.id
 
-    async def search(
+    async def embedding_search(
         self,
         user_id: str,
         query_vector: list[float],
@@ -70,7 +70,7 @@ class FakeMilvus:
         agent_name: str | None = None,
         content_type: str | None = None,
     ) -> list[SearchResult]:
-        self.search_calls.append(
+        self.embedding_search_calls.append(
             {
                 "user_id": user_id,
                 "query_vector": query_vector,
@@ -80,6 +80,30 @@ class FakeMilvus:
             }
         )
         return [r for r in self.records if r.content_type == (content_type or "")]
+
+    async def bm25_search(
+        self,
+        user_id: str,
+        query: str,
+        top_k: int = 5,
+        agent_name: str | None = None,
+        content_type: str | None = None,
+    ) -> list[SearchResult]:
+        self.bm25_search_calls.append(
+            {
+                "user_id": user_id,
+                "query": query,
+                "top_k": top_k,
+                "agent_name": agent_name,
+                "content_type": content_type,
+            }
+        )
+        # 关键词命中：简单按查询子串过滤
+        return [
+            r
+            for r in self.records
+            if r.content_type == (content_type or "") and query in r.text
+        ]
 
     async def list_records(
         self,
@@ -163,9 +187,55 @@ def test_search_only_returns_knowledge():
 
     results = asyncio.run(service.search(user_id="u1", query="计算器", top_k=3))
     assert results
-    assert milvus.search_calls[0]["content_type"] == "knowledge"
+    assert milvus.embedding_search_calls[0]["content_type"] == "knowledge"
     # 服务端为给 rerank / 过滤留出余量，粗召回 top_k * 4，最后再切片回 top_k
-    assert milvus.search_calls[0]["top_k"] == 12
+    assert milvus.embedding_search_calls[0]["top_k"] == 12
+
+
+def test_search_without_rrf_skips_bm25():
+    """rrf_enabled=False（默认）时只走向量检索，不调用 BM25。"""
+    milvus = FakeMilvus()
+    service = KnowledgeService(milvus, FakeEmbedding())
+    asyncio.run(
+        service.add_text(
+            user_id="u1",
+            title="知识库",
+            content="Python 计算器实现",
+        )
+    )
+
+    results = asyncio.run(service.search(user_id="u1", query="计算器", top_k=3))
+    assert results
+    assert milvus.embedding_search_calls
+    assert not milvus.bm25_search_calls
+
+
+def test_search_with_rrf_fuses_bm25_and_vector():
+    """rrf_enabled=True 时，向量 + BM25 两路召回并融合去重。"""
+    milvus = FakeMilvus()
+    service = KnowledgeService(milvus, FakeEmbedding(), rrf_enabled=True)
+    asyncio.run(
+        service.add_text(
+            user_id="u1",
+            title="知识库",
+            content="Python 计算器实现",
+        )
+    )
+    asyncio.run(
+        service.add_text(
+            user_id="u1",
+            title="知识库二",
+            content="Java 计算器实现",
+        )
+    )
+
+    results = asyncio.run(service.search(user_id="u1", query="计算器", top_k=3))
+    assert results
+    assert milvus.embedding_search_calls
+    assert milvus.bm25_search_calls
+    assert milvus.bm25_search_calls[0]["query"] == "计算器"
+    # 两路都粗召回 top_k * 4
+    assert milvus.bm25_search_calls[0]["top_k"] == 12
 
 
 def test_list_documents_groups_by_document_id():
