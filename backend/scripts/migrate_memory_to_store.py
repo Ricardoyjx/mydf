@@ -94,7 +94,7 @@ async def _migrate(
 
 async def run(*, delete_source: bool) -> int:
     from my_df.config.app_config import get_app_config
-    from my_df.config.path import get_paths
+    from my_df.config.paths import get_paths
     from my_df.runtime.store.async_provider import make_store
 
     env_path = _BACKEND_DIR / ".env"
