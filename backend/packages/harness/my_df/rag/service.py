@@ -344,6 +344,7 @@ class KnowledgeService:
             content_type=self._content_type,
         )
 
+        fused = False  # 是否真的执行了 RRF 融合（分数为 RRF 量纲）
         if self._rrf_enabled:
             """BM25 关键词召回（第二路）"""
             try:
@@ -366,8 +367,9 @@ class KnowledgeService:
                 len(k_results),
             )
 
-            if k_results:
+            if k_results and e_results:
                 result = rrf.rrf_fuse([e_results, k_results], k=60)
+                fused = True
                 fused_top = result[:top_k]
                 detail = ", ".join(
                     f"#{i} id={item.id} score={item.score:.6f} "
@@ -380,6 +382,12 @@ class KnowledgeService:
                     len(fused_top),
                     detail,
                 )
+            elif k_results:
+                # 向量空召回：保留 BM25 原始分，避免 RRF 稀释后 min_score 误伤
+                result = k_results
+                logger.info(
+                    "RRF 跳过融合: 向量未命中，仅使用 BM25 召回 %d 条", len(result)
+                )
             else:
                 # BM25 未命中或不可用：保留向量原始分数，
                 # 避免 RRF 稀释分数导致 min_score 过滤误伤
@@ -388,7 +396,9 @@ class KnowledgeService:
         else:
             result = e_results
 
-        return await self._finalize_search(result, query, top_k, min_score)
+        return await self._finalize_search(
+            result, query, top_k, min_score, fused=fused
+        )
 
     async def _finalize_search(
         self,
@@ -396,8 +406,19 @@ class KnowledgeService:
         query: str,
         top_k: int,
         min_score: float | None,
+        *,
+        fused: bool = False,
     ) -> list[SearchResult]:
-        """rerank + 最低分过滤 + top_k 截断（small-to-big 与旧路径共用）。"""
+        """rerank + 最低分过滤 + top_k 截断（small-to-big 与旧路径共用）。
+
+        ``min_score`` 只对“可比较的分数”生效：
+        - 重排成功后：rerank logits；
+        - 未重排且未融合：向量/BM25 原始相似度。
+
+        重排失败或融合后未重排（分数为 RRF 小值）时跳过过滤，
+        避免默认阈值（0.1/0.3）把全部结果误删。
+        """
+        rerank_ok = False
         if self._rerank is not None:
             try:
                 await self._rerank.ensure_loaded()
@@ -408,11 +429,18 @@ class KnowledgeService:
                 result = [item for _, item in ranked]
                 for score, item in ranked:
                     item.score = score
+                rerank_ok = True
             except Exception as e:  # noqa: BLE001
                 logger.warning("Reranker 懒加载或精排失败，本次跳过精排: %s", e)
 
-        if min_score is not None:
+        if min_score is not None and (rerank_ok or (self._rerank is None and not fused)):
             result = [r for r in result if r.score >= min_score]
+        elif min_score is not None and not rerank_ok:
+            logger.warning(
+                "跳过 min_score 过滤（分数不可比）: rerank=%s, fused=%s",
+                rerank_ok,
+                fused,
+            )
         return result[:top_k]
 
     async def list_documents(
